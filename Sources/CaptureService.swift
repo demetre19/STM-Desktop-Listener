@@ -447,7 +447,10 @@ private final class ScreenFrameCache: NSObject, SCStreamOutput {
                 width: CVPixelBufferGetWidth(pixelBuffer),
                 height: CVPixelBufferGetHeight(pixelBuffer)
             )
-            guard let image = imageContext.createCGImage(ciImage, from: rect) else { return nil }
+            guard let streamImage = imageContext.createCGImage(ciImage, from: rect),
+                  let image = frozenCopy(of: streamImage) else {
+                return nil
+            }
             let scale = CGFloat(image.width) / max(1, spec.frame.width)
             return ScreenSnapshot(screenFrame: spec.frame, scale: scale, image: image)
         }
@@ -455,6 +458,26 @@ private final class ScreenFrameCache: NSObject, SCStreamOutput {
         Logger.log("capture stream cache snapshotMs=\(Int(Date().timeIntervalSince(started) * 1000)) count=\(snapshots.count)")
         return snapshots
     }
+    private func frozenCopy(of image: CGImage) -> CGImage? {
+        let colorSpace = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue
+            | CGBitmapInfo.byteOrder32Little.rawValue
+        guard let context = CGContext(
+            data: nil,
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: 8,
+            bytesPerRow: image.width * 4,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            return nil
+        }
+        context.interpolationQuality = .none
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return context.makeImage()
+    }
+
 
     private func configure(
         content: SCShareableContent?,
