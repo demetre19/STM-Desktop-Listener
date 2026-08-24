@@ -6,7 +6,9 @@ STM Desktop Listener puts capture, dictation, text cleanup, power controls, and 
 
 It began as a companion app for SEO Time Machines, then grew into an independent Mac toolbelt that anyone can use. No SEO Time Machines account or app is required.
 
-![STM Desktop Listener feature controls](Images/features-overview.png)
+[Download the latest precompiled release](https://github.com/demetre19/STM-Desktop-Listener-Releases/releases/latest)
+
+![STM Desktop Listener feature controls](Images/features-overview.jpg)
 
 ## Spend less time switching apps
 
@@ -22,7 +24,7 @@ Turn screenshots, locked PDFs, videos, and image-only text into editable copy. O
 
 Dictate anywhere on your Mac with a primary and alternate shortcut. Choose fast cloud transcription or private local Parakeet, then keep working with clean punctuation and capitalization.
 
-<img width="623" height="764" alt="dictation" src="https://github.com/user-attachments/assets/263949ac-1cfc-47a7-ad8f-036770ee8f05" />
+![Choose the right dictation model for the moment](Images/dictation.jpg)
 
 ### Fix text before it slows you down
 
@@ -52,25 +54,25 @@ Move Finder-selected or clipboard images into your existing browser optimiser wi
 
 Schedule shutdown or sleep, keep the Mac awake for a task, and see the current state at a glance. Before a scheduled shutdown, STM can save dirty Git repositories discovered from open cmux or OMP sessions.
 
-![Schedule sleep, shutdown, and keep-awake time](Images/power-controls.png)
+![Schedule sleep, shutdown, and keep-awake time](Images/power-controls.jpg)
 
 ### Keep presence active without accidental clicks
 
 Move the pointer at a safe interval for a fixed duration or until you stop it. Mouse Jiggler never clicks, types, drags, or scrolls.
 
-![Set a safe mouse movement interval](Images/mouse-jiggler.png)
+![Set a safe mouse movement interval](Images/mouse-jiggler.jpg)
 
 ### See every permission in one place
 
 Check Microphone, Screen Recording, and Accessibility access without searching through macOS settings. Open or reset the right permission from one clear panel.
 
-![Review required macOS permissions](Images/permissions.png)
+![Review required macOS permissions](Images/permissions.jpg)
 
 ### Keep essential utilities close
 
 Open settings, import credentials, install the browser bridge, reach the config folder, or quit the app from one compact Tools tab.
 
-![Open STM Desktop Listener tools](Images/tools.png)
+![Open STM Desktop Listener tools](Images/tools.jpg)
 
 ## Choose only the tools you want
 
