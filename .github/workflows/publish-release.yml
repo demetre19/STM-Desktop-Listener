@@ -99,7 +99,42 @@ jobs:
           }
           (cd release && shasum -a 256 -c SHA256SUMS.txt)
 
+      - name: Accept an already-published identical bootstrap release
+        id: existing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIC_REPO: demetre19/STM-Desktop-Listener-Releases
+        run: |
+          set -euo pipefail
+          if ! release_json="$(gh api "repos/$PUBLIC_REPO/releases/tags/$GITHUB_REF_NAME" 2>/dev/null)"; then
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$(jq -r '.draft' <<<"$release_json")" == "false" ]] || {
+            echo "Existing release is still a draft." >&2
+            exit 1
+          }
+          expected_assets="$(
+            for path in release/*.dmg release/*.zip release/SHA256SUMS.txt; do
+              printf '%s\t%s\tsha256:%s\n' \
+                "$(basename "$path")" \
+                "$(stat -c '%s' "$path")" \
+                "$(shasum -a 256 "$path" | cut -d ' ' -f 1)"
+            done
+          )"
+          actual_assets="$(
+            jq -r '.assets[] | select(.state == "uploaded" and .size > 0) | [.name, (.size | tostring), .digest] | @tsv' <<<"$release_json"
+          )"
+          [[ "$(printf '%s\n' "$actual_assets" | LC_ALL=C sort)" == "$(printf '%s\n' "$expected_assets" | LC_ALL=C sort)" ]] || {
+            echo "Existing public release does not exactly match the gated bundle." >&2
+            exit 1
+          }
+          echo "already_published=true" >> "$GITHUB_OUTPUT"
+          echo "Identical public release already exists; no publication credential is needed."
+
       - name: Create validated draft and publish it
+        if: steps.existing.outputs.already_published != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.STM_RELEASES_TOKEN }}
