@@ -137,8 +137,9 @@ if [[ "${UNIVERSAL:-1}" == "1" && "$ONNXRUNTIME_ARCHS" == *"x86_64"* ]] && comma
   lipo -create "$TMP/STM Desktop Listener-arm64" "$TMP/STM Desktop Listener-x86_64" -output "$BIN"
   echo "Built universal binary: arm64 + x86_64"
 else
-  echo "Universal build unavailable; building for this Mac only."
-  build_arch "$(uname -m)" "$BIN"
+  BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
+  echo "Building current requested architecture: $BUILD_ARCH"
+  build_arch "$BUILD_ARCH" "$BIN"
 fi
 
 chmod +x "$BIN"

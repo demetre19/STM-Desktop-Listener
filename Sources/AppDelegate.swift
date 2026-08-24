@@ -15,6 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var animationPhase: CGFloat = 0
     private var animationColor = NSColor.black
     private var runtimeEventObservers: [NSObjectProtocol] = []
+    private let updateService = STMUpdateService()
+    private var automaticUpdateCheckTask: Task<Void, Never>?
+    private var updateCheckTask: Task<Void, Never>?
+    private var updateDownloadTask: Task<Void, Never>?
 
     init(openFeaturesOnLaunch: Bool = false) {
         self.openFeaturesOnLaunch = openFeaturesOnLaunch
@@ -41,11 +45,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if openFeaturesOnLaunch {
             DispatchQueue.main.async { self.showSettings(tab: "Features") }
         }
+        scheduleAutomaticUpdateCheck()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         Logger.log("runtime app event=willTerminate")
         features.dictation.cancel()
+        automaticUpdateCheckTask?.cancel()
+        automaticUpdateCheckTask = nil
+        updateCheckTask?.cancel()
+        updateCheckTask = nil
+        updateDownloadTask?.cancel()
+        updateDownloadTask = nil
         runtimeEventObservers.forEach(NotificationCenter.default.removeObserver)
         runtimeEventObservers.removeAll()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
@@ -228,6 +239,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func menuOpenConfigFolder() {
         openConfigFolder()
+    }
+
+    var menuUpdateCheckInProgress: Bool {
+        updateCheckTask != nil
+    }
+
+    func menuCheckForUpdates() {
+        automaticUpdateCheckTask?.cancel()
+        automaticUpdateCheckTask = nil
+        startUpdateCheck(mode: .manual)
     }
 
     func menuRequestMicrophone() {
@@ -487,6 +508,152 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc private func openConfigFolder() {
         NSWorkspace.shared.open(AppPaths.applicationSupport)
+    }
+
+    private func scheduleAutomaticUpdateCheck() {
+        automaticUpdateCheckTask?.cancel()
+        automaticUpdateCheckTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.automaticUpdateCheckTask = nil
+            self.startUpdateCheck(mode: .automatic)
+        }
+    }
+
+    private func startUpdateCheck(mode: STMUpdateCheckMode) {
+        guard updateCheckTask == nil else {
+            if mode == .manual {
+                showAlert("Update check in progress", "STM Desktop Listener is already checking for an update.")
+            }
+            return
+        }
+
+        let service = updateService
+        let installedVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        updateCheckTask = Task { @MainActor [weak self] in
+            do {
+                let result = try await service.check(
+                    currentVersionString: installedVersion,
+                    mode: mode,
+                    now: Date()
+                )
+                guard !Task.isCancelled else { return }
+                self?.updateCheckTask = nil
+                self?.refreshMenu()
+                self?.handleUpdateCheckResult(result, mode: mode, installedVersion: installedVersion)
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.updateCheckTask = nil
+                self?.refreshMenu()
+                if mode == .manual {
+                    self?.showAlert(
+                        "Couldn’t check for updates",
+                        "\(error.localizedDescription)\n\nYour current app is unchanged. Check your connection and try again."
+                    )
+                }
+            }
+        }
+        refreshMenu()
+    }
+
+    private func handleUpdateCheckResult(
+        _ result: STMUpdateCheckResult,
+        mode: STMUpdateCheckMode,
+        installedVersion: String
+    ) {
+        switch result {
+        case .notDue:
+            if mode == .manual {
+                showAlert("You’re up to date", "STM Desktop Listener \(installedVersion) is the latest available version.")
+            }
+        case .upToDate:
+            if mode == .manual {
+                showAlert("You’re up to date", "STM Desktop Listener \(installedVersion) is the latest available version.")
+            }
+        case let .updateAvailable(release):
+            presentUpdateAvailable(release, installedVersion: installedVersion)
+        }
+    }
+
+    private func presentUpdateAvailable(_ release: STMUpdateRelease, installedVersion: String) {
+        let releaseLabel = release.isPrerelease ? "PRERELEASE" : "STABLE"
+        let published = DateFormatter.localizedString(
+            from: release.publishedAt,
+            dateStyle: .medium,
+            timeStyle: .none
+        )
+        let releaseNotes = release.notes.isEmpty
+            ? "No release notes were provided."
+            : String(release.notes.prefix(1_200))
+        let alert = NSAlert()
+        alert.messageText = "STM Desktop Listener update available"
+        alert.informativeText = """
+        Installed: \(installedVersion)
+        Available: \(release.version.description)
+        Release channel: \(releaseLabel)
+        Published: \(published)
+
+        \(releaseNotes)
+
+        Downloading saves a verified DMG in Downloads and reveals it in Finder. STM will not install or replace the app.
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Download DMG")
+        alert.addButton(withTitle: "Open Release Page")
+        alert.addButton(withTitle: "Later")
+        alert.buttons[2].keyEquivalent = "\u{1b}"
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            downloadUpdate(release)
+        case .alertSecondButtonReturn:
+            guard NSWorkspace.shared.open(release.releasePageURL) else {
+                showAlert("Couldn’t open release page", "Open \(release.releasePageURL.absoluteString) in your browser.")
+                return
+            }
+        default:
+            do {
+                try updateService.dismiss(version: release.version)
+            } catch {
+                showAlert("Couldn’t save Later", error.localizedDescription)
+            }
+        }
+    }
+
+    private func downloadUpdate(_ release: STMUpdateRelease) {
+        guard updateDownloadTask == nil else {
+            showAlert("Download in progress", "STM Desktop Listener is already downloading and verifying an update.")
+            return
+        }
+
+        showNotice(
+            "Downloading verified DMG",
+            "Version \(release.version.description) is downloading. STM will notify you when verification finishes."
+        )
+        let service = updateService
+        updateDownloadTask = Task { @MainActor [weak self] in
+            do {
+                let downloadedURL = try await service.download(release, downloadsDirectory: nil)
+                guard !Task.isCancelled else { return }
+                self?.updateDownloadTask = nil
+                NSWorkspace.shared.activateFileViewerSelecting([downloadedURL])
+                self?.showAlert(
+                    "Verified update downloaded",
+                    "\(downloadedURL.lastPathComponent) is ready in Downloads.\n\nThe app has not been installed or replaced."
+                )
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.updateDownloadTask = nil
+                self?.showAlert(
+                    "Update download failed",
+                    "\(error.localizedDescription)\n\nNothing was installed or replaced. Try again or open the release page."
+                )
+            }
+        }
     }
 
     @objc private func requestMicrophone() {

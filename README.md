@@ -102,6 +102,28 @@ You need:
 
 Cloudflare credentials are optional when you use local Parakeet transcription. Brave or Chrome plus the STM extension is needed only for scrolling-capture and image-optimiser bridge workflows.
 
+## Precompiled downloads and release channels
+
+Precompiled downloads are published as GitHub Releases in [`demetre19/STM-Desktop-Listener-Releases`](https://github.com/demetre19/STM-Desktop-Listener-Releases/releases). The private source repository is not mirrored there; the public channel contains only release notes, precompiled packages, and checksums.
+
+[Download the latest precompiled release](https://github.com/demetre19/STM-Desktop-Listener-Releases/releases/latest)
+
+Each published version provides:
+
+- `STM-Desktop-Listener-Mac-arm64-v<version>.dmg`
+- `STM-Desktop-Listener-Mac-arm64-v<version>.zip`
+- `SHA256SUMS.txt`
+
+Download the checksum manifest beside the DMG or ZIP and verify it before opening the package:
+
+```bash
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+Both stable releases and explicitly marked prereleases are eligible for update notifications; draft releases are excluded because they are not public. The app checks quietly no more than once per day and also supports a manual check. It can download and verify the exact arm64 DMG, but it never installs or replaces the app automatically.
+
+Initial packages are ad hoc signed rather than Apple-notarized. They support macOS 14 or later on Apple silicon and may show macOS publisher or quarantine warnings.
+
 ## Build
 
 ```bash
@@ -131,8 +153,8 @@ The installer builds the app, copies it to `/Applications/STM Desktop Listener.a
 Output:
 
 ```text
-dist/STM-Desktop-Listener-Mac-v<version>.zip
-dist/STM-Desktop-Listener-Mac-v<version>.dmg
+dist/STM-Desktop-Listener-Mac-arm64-v<version>.zip
+dist/STM-Desktop-Listener-Mac-arm64-v<version>.dmg
 ```
 
 ## Credentials

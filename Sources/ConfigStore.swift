@@ -30,6 +30,9 @@ enum AppPaths {
 }
 
 enum ConfigStore {
+    private static let lastSuccessfulUpdateCheckKey = "updates.lastSuccessfulCheck"
+    private static let dismissedUpdateVersionKey = "updates.dismissedVersion"
+
     private static func read() -> [String: Any] {
         guard let data = try? Data(contentsOf: AppPaths.configURL),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -95,6 +98,37 @@ enum ConfigStore {
     static func set(_ value: Any, for key: String) throws {
         var json = read()
         json[key] = value
+        try write(json)
+    }
+
+    static func lastSuccessfulUpdateCheck() -> Date? {
+        let timestamp = double(lastSuccessfulUpdateCheckKey, default: .nan)
+        guard timestamp.isFinite, timestamp >= 0 else { return nil }
+        return Date(timeIntervalSince1970: timestamp)
+    }
+
+    static func recordSuccessfulUpdateCheck(at date: Date) throws {
+        let timestamp = date.timeIntervalSince1970
+        guard timestamp.isFinite, timestamp >= 0 else { return }
+        try set(timestamp, for: lastSuccessfulUpdateCheckKey)
+    }
+
+    static func dismissedUpdateVersion() -> String? {
+        string(dismissedUpdateVersionKey)
+    }
+
+    static func setDismissedUpdateVersion(_ version: String?) throws {
+        var json = read()
+        if let version {
+            let cleaned = version.trimmingCharacters(in: .whitespacesAndNewlines)
+            if cleaned.isEmpty {
+                json.removeValue(forKey: dismissedUpdateVersionKey)
+            } else {
+                json[dismissedUpdateVersionKey] = cleaned
+            }
+        } else {
+            json.removeValue(forKey: dismissedUpdateVersionKey)
+        }
         try write(json)
     }
 

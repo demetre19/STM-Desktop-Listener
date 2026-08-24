@@ -5,20 +5,40 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 DIST="$ROOT/dist"
 APP="$DIST/STM Desktop Listener.app"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/Info.plist")"
-PKG_NAME="STM-Desktop-Listener-Mac-v$VERSION"
+PKG_NAME="STM-Desktop-Listener-Mac-arm64-v$VERSION"
 PKG_ROOT="$DIST/$PKG_NAME"
 ZIP="$DIST/$PKG_NAME.zip"
 DMG="$DIST/$PKG_NAME.dmg"
 
-if ! command -v swiftc >/dev/null 2>&1; then
-  echo "Swift compiler not found. Install Apple Command Line Tools first:" >&2
-  echo "  xcode-select --install" >&2
-  exit 1
-fi
+for command_name in swiftc hdiutil lipo; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "Required packaging tool not found: $command_name" >&2
+    [[ "$command_name" == "swiftc" ]] && echo "Install Apple Command Line Tools with: xcode-select --install" >&2
+    exit 1
+  fi
+done
 
-"$ROOT/build.sh"
+BUILD_ARCH=arm64 UNIVERSAL=0 "$ROOT/build.sh"
 
-rm -rf "$DIST"/STM-Desktop-Listener-*.zip "$DIST"/STM-Desktop-Listener-*.dmg "$DIST"/STM-Desktop-Listener-Mac-v*/ "$DIST/STM-Desktop-Listener-Mac"
+verify_arm64_macho() {
+  local path="$1"
+  local archs
+  archs="$(lipo -archs "$path")"
+  if [[ "$archs" != "arm64" ]]; then
+    echo "Expected an arm64-only Mach-O file, found '$archs': $path" >&2
+    exit 1
+  fi
+}
+
+verify_arm64_macho "$APP/Contents/MacOS/STM Desktop Listener"
+
+while IFS= read -r -d '' candidate; do
+  if file "$candidate" | grep -q 'Mach-O'; then
+    verify_arm64_macho "$candidate"
+  fi
+done < <(find "$APP/Contents/Frameworks" -type f -name '*.dylib' -print0)
+
+rm -rf "$DIST"/STM-Desktop-Listener-*.zip "$DIST"/STM-Desktop-Listener-*.dmg "$DIST"/STM-Desktop-Listener-Mac-v*/ "$DIST"/STM-Desktop-Listener-Mac-arm64-v*/ "$DIST/STM-Desktop-Listener-Mac" "$DIST/SHA256SUMS.txt"
 mkdir -p "$PKG_ROOT"
 cp -R "$APP" "$PKG_ROOT/"
 cp "$ROOT/README.md" "$PKG_ROOT/README.md"
@@ -70,9 +90,7 @@ chmod +x "$PKG_ROOT/install.command"
   ditto -c -k --sequesterRsrc --keepParent "$PKG_NAME" "$PKG_NAME.zip"
 )
 
-if command -v hdiutil >/dev/null 2>&1; then
-  hdiutil create -volname "STM Desktop Listener" -srcfolder "$PKG_ROOT" -ov -format UDZO "$DMG" >/dev/null
-fi
+hdiutil create -volname "STM Desktop Listener" -srcfolder "$PKG_ROOT" -ov -format UDZO "$DMG" >/dev/null
 
 echo "Packaged: $ZIP"
-[[ -f "$DMG" ]] && echo "Packaged: $DMG"
+echo "Packaged: $DMG"

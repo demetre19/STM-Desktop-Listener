@@ -1,0 +1,120 @@
+name: Publish precompiled release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, gate, and publish
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the exact source tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build and validate release assets
+        id: assets
+        shell: bash
+        run: .github/scripts/prepare-release.sh "${GITHUB_REF_NAME}"
+
+      - name: Create validated draft and publish it
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.STM_RELEASES_TOKEN }}
+          PUBLIC_REPO: demetre19/STM-Desktop-Listener-Releases
+          RELEASE_TAG: ${{ steps.assets.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.assets.outputs.version }}
+          IS_PRERELEASE: ${{ steps.assets.outputs.prerelease }}
+          DMG_PATH: ${{ steps.assets.outputs.dmg_path }}
+          ZIP_PATH: ${{ steps.assets.outputs.zip_path }}
+          CHECKSUMS_PATH: ${{ steps.assets.outputs.checksums_path }}
+        run: |
+          set -euo pipefail
+
+          [[ -n "${GH_TOKEN:-}" ]] || {
+            echo "STM_RELEASES_TOKEN is not configured." >&2
+            exit 1
+          }
+
+          if gh release view "$RELEASE_TAG" --repo "$PUBLIC_REPO" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists in $PUBLIC_REPO; tags are immutable." >&2
+            exit 1
+          fi
+
+          notes_file="$RUNNER_TEMP/stm-release-notes.txt"
+          cat > "$notes_file" <<NOTES
+          STM Desktop Listener v${RELEASE_VERSION}
+
+          Precompiled release for Apple silicon (arm64) Macs running macOS 14 or later.
+
+          Download the DMG or ZIP and SHA256SUMS.txt, then verify the package checksum before opening it:
+
+              shasum -a 256 -c SHA256SUMS.txt
+
+          This initial package is ad hoc signed and is not Apple-notarized. Installation remains a manual user action; the app does not replace itself.
+          NOTES
+
+          release_args=(
+            "$RELEASE_TAG"
+            "$DMG_PATH"
+            "$ZIP_PATH"
+            "$CHECKSUMS_PATH"
+            --repo "$PUBLIC_REPO"
+            --title "STM Desktop Listener v${RELEASE_VERSION}"
+            --notes-file "$notes_file"
+            --draft
+          )
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            release_args+=(--prerelease)
+          fi
+
+          gh release create "${release_args[@]}"
+
+          release_id="$(gh api "repos/$PUBLIC_REPO/releases/tags/$RELEASE_TAG" --jq '.id')"
+          [[ -n "$release_id" ]] || {
+            echo "Draft release could not be read back." >&2
+            exit 1
+          }
+          draft_state="$(gh api "repos/$PUBLIC_REPO/releases/$release_id" --jq '.draft')"
+          prerelease_state="$(gh api "repos/$PUBLIC_REPO/releases/$release_id" --jq '.prerelease')"
+          [[ "$draft_state" == "true" && "$prerelease_state" == "$IS_PRERELEASE" ]] || {
+            echo "Release metadata verification failed; the release will remain unpublished." >&2
+            exit 1
+          }
+
+
+          expected_assets="$(
+            printf '%s\t%s\n' "$(basename "$DMG_PATH")" "$(stat -f '%z' "$DMG_PATH")"
+            printf '%s\t%s\n' "$(basename "$ZIP_PATH")" "$(stat -f '%z' "$ZIP_PATH")"
+            printf '%s\t%s\n' "$(basename "$CHECKSUMS_PATH")" "$(stat -f '%z' "$CHECKSUMS_PATH")"
+          )"
+          actual_assets="$(
+            gh api "repos/$PUBLIC_REPO/releases/$release_id" \
+              --jq '.assets[] | select(.state == "uploaded" and .size > 0) | [.name, (.size | tostring)] | @tsv'
+          )"
+
+          if [[ "$(printf '%s\n' "$actual_assets" | LC_ALL=C sort)" != "$(printf '%s\n' "$expected_assets" | LC_ALL=C sort)" ]]; then
+            echo "Draft asset verification failed; the release will remain unpublished." >&2
+            exit 1
+          fi
+
+          gh api --method PATCH "repos/$PUBLIC_REPO/releases/$release_id" -F draft=false >/dev/null
+          [[ "$(gh api "repos/$PUBLIC_REPO/releases/$release_id" --jq '.draft')" == "false" ]] || {
+            echo "Release publication could not be confirmed." >&2
+            exit 1
+          }
+          echo "Published $PUBLIC_REPO release $RELEASE_TAG with all required assets."

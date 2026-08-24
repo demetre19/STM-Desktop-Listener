@@ -373,12 +373,20 @@ final class STMPopoverViewController: NSViewController {
     }
 
     private func toolsCard() -> NSView {
-        card(title: "Tools", symbol: "wrench.and.screwdriver", subtitle: "Utility actions that used to sit below the menu separators.", views: [
+        let checkingForUpdates = app?.menuUpdateCheckInProgress ?? false
+        return card(title: "Tools", symbol: "wrench.and.screwdriver", subtitle: "Settings, credentials, integrations, and app maintenance.", views: [
+            infoBox("Updates download a verified DMG to Downloads. STM never installs or replaces the app."),
             buttonGrid([
                 action("Open Settings", #selector(openSettings)),
                 action("Import Credentials", #selector(importCredentials)),
                 action("Install Browser Bridge", #selector(installBrowserBridge)),
-                action("Open Config Folder", #selector(openConfigFolder))
+                action("Open Config Folder", #selector(openConfigFolder)),
+                action(
+                    checkingForUpdates ? "Checking for Updates..." : "Check for Updates",
+                    #selector(checkForUpdates),
+                    enabled: !checkingForUpdates,
+                    accent: cyan
+                )
             ]),
             divider(),
             fullWidthButton("Quit STM Desktop Listener", #selector(quitApp), quiet: true, destructive: true)
@@ -743,6 +751,7 @@ final class STMPopoverViewController: NSViewController {
     @objc private func importCredentials() { app?.menuImportCredentials() }
     @objc private func installBrowserBridge() { app?.menuInstallBrowserBridge() }
     @objc private func openConfigFolder() { app?.menuOpenConfigFolder() }
+    @objc private func checkForUpdates() { app?.menuCheckForUpdates() }
     @objc private func requestMicrophone() { app?.menuRequestMicrophone(); refresh() }
     @objc private func requestScreen() { app?.menuRequestScreen(); refresh() }
     @objc private func openScreenSettings() { app?.menuOpenScreenSettings(); refresh() }
