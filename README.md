@@ -22,7 +22,7 @@ Turn screenshots, locked PDFs, videos, and image-only text into editable copy. O
 
 Dictate anywhere on your Mac with a primary and alternate shortcut. Choose fast cloud transcription or private local Parakeet, then keep working with clean punctuation and capitalization.
 
-![Choose the right dictation model for the moment](Images/dictation.png)
+<img width="623" height="764" alt="dictation" src="https://github.com/user-attachments/assets/263949ac-1cfc-47a7-ad8f-036770ee8f05" />
 
 ### Fix text before it slows you down
 
