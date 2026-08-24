@@ -1,0 +1,12 @@
+sherpa-onnx-online-punct-en-2024-08-06
+
+Source archive:
+https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-online-punct-en-2024-08-06.tar.bz2
+
+Expected SHA-256:
+archive: 9f5e5a72c7d2829635bd074fce92b6bbd5b78da8a52e7ad8ed1be933f366b99d
+model.int8.onnx: 9d611f445fe4a46186080fe161be6059d87d72eb88d3a8cb00c1a06e83a6067e
+bpe.vocab: e118b7ad88c54db562517df49e1cffd4836d166c34fb190fd311d7f34eb238f5
+
+Model: Edge-Punct-Casing converted for sherpa-onnx.
+Runtime: sherpa-onnx online punctuation API.

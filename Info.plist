@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>STM Desktop Listener</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.seotimemachines.stm-desktop-listener</string>
+  <key>CFBundleName</key>
+  <string>STM Desktop Listener</string>
+  <key>CFBundleDisplayName</key>
+  <string>STM Desktop Listener</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <key>CFBundleShortVersionString</key>
+    <string>0.1.3</string>
+  <key>CFBundleVersion</key>
+    <string>4</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>STM Desktop Listener records your voice for private local or configured cloud transcription.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>STM Desktop Listener captures selected screen regions for screenshots, OCR, color sampling, and pixel measurement.</string>
+  <key>NSAccessibilityAccessDescription</key>
+  <string>STM Desktop Listener needs Accessibility permission to move the mouse for Mouse Jiggler and paste dictation results.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>STM Desktop Listener asks Finder for selected files and the current folder when you copy paths, optimize images, or create a new file.</string>
+</dict>
+</plist>
