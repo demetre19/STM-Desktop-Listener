@@ -70,6 +70,7 @@ final class DictationController {
     var onStateChange: ((DictationState) -> Void)?
     var onError: ((String, String) -> Void)?
     var onNotice: ((String, String) -> Void)?
+    var onAudioLevel: ((CGFloat) -> Void)?
     var onVoiceCommand: ((String) -> Bool)?
 
     init(clipboard: ClipboardService) {
@@ -325,6 +326,26 @@ final class DictationController {
     }
 
     private func writeAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+        if let samples = buffer.floatChannelData?[0] {
+            let frameCount = Int(buffer.frameLength)
+            var sum: Float = 0
+            var sampleCount = 0
+            for index in stride(from: 0, to: frameCount, by: 4) {
+                let sample = samples[index]
+                sum += sample * sample
+                sampleCount += 1
+            }
+            if sampleCount > 0 {
+                let rms = sqrt(sum / Float(sampleCount))
+                let decibels = 20 * log10(max(rms, 0.000_001))
+                let normalizedLevel = CGFloat(min(max((decibels + 52) / 44, 0), 1))
+                let level = sqrt(normalizedLevel)
+                DispatchQueue.main.async { [weak self] in
+                    self?.onAudioLevel?(level)
+                }
+            }
+        }
+
         audioLock.lock()
         defer { audioLock.unlock() }
         guard let writer = currentChunkWriter else { return }

@@ -23,31 +23,6 @@ struct LightningIcon {
     }
 }
 
-struct WaveIcon {
-    static func menuBarImage(color: NSColor, phase: CGFloat) -> NSImage {
-        let size = NSSize(width: 28, height: 18)
-        let image = NSImage(size: size)
-        image.lockFocus()
-        NSColor.clear.setFill()
-        NSRect(origin: .zero, size: size).fill()
-        color.setStroke()
-        let path = NSBezierPath()
-        path.lineWidth = 2.2
-        let mid = size.height / 2
-        for x in stride(from: CGFloat(1), through: size.width - 1, by: 1) {
-            let y = mid + sin((x / 3.0) + phase) * 5.0
-            if x == 1 {
-                path.move(to: NSPoint(x: x, y: y))
-            } else {
-                path.line(to: NSPoint(x: x, y: y))
-            }
-        }
-        path.stroke()
-        image.unlockFocus()
-        image.isTemplate = false
-        return image
-    }
-}
 
 struct MouseIcon {
     static func menuBarImage(color: NSColor) -> NSImage {

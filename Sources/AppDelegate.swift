@@ -11,9 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var settingsWindowController: SettingsWindowController?
     private var credentialsGuideWindowController: CredentialsGuideWindowController?
     private let openFeaturesOnLaunch: Bool
-    private var animationTimer: Timer?
-    private var animationPhase: CGFloat = 0
-    private var animationColor = NSColor.black
+    private let dictationHUD = DictationHUDController()
     private var runtimeEventObservers: [NSObjectProtocol] = []
     private let updateService = STMUpdateService()
     private var automaticUpdateCheckTask: Task<Void, Never>?
@@ -51,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationWillTerminate(_ notification: Notification) {
         Logger.log("runtime app event=willTerminate")
         features.stopCaptureCache()
+        dictationHUD.hide()
         features.dictation.cancel()
         automaticUpdateCheckTask?.cancel()
         automaticUpdateCheckTask = nil
@@ -72,15 +71,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         features.onNotice = { _, _ in }
         features.dictation.onError = { [weak self] title, message in self?.showAlert(title, message) }
         features.dictation.onNotice = { [weak self] title, message in self?.showAlert(title, message) }
+        features.dictation.onAudioLevel = { [weak self] level in
+            self?.dictationHUD.updateLevel(level)
+        }
         features.dictation.onStateChange = { [weak self] state in
             switch state {
             case .idle:
+                self?.dictationHUD.hide()
                 self?.setIdleIcon()
-            case .recording(let elapsed, let limit):
-                self?.setWaveIcon(color: .labelColor, title: "\(Self.formatDuration(elapsed))/\(Self.formatDuration(limit))")
-            case .processing(let currentChunk, let totalChunks):
-                let title = totalChunks > 1 ? "\(currentChunk)/\(totalChunks)" : ""
-                self?.setWaveIcon(color: NSColor(calibratedRed: 1.0, green: 0.38, blue: 0.0, alpha: 1.0), title: title)
+            case .recording:
+                self?.dictationHUD.showRecording()
+            case .processing:
+                self?.dictationHUD.showProcessing()
             }
         }
         features.mouseJiggler.onStateChange = { [weak self] in
@@ -107,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
     func applicationDidChangeScreenParameters(_ notification: Notification) {
         features.screenConfigurationChanged()
+        dictationHUD.position()
     }
 
 
@@ -897,7 +900,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func setIdleIcon() {
-        stopAnimationTimer()
         statusItem.button?.title = ""
         if features.mouseJiggler.isActive {
             statusItem.button?.toolTip = features.mouseJiggler.statusTitle
@@ -906,32 +908,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             statusItem.button?.toolTip = nil
             statusItem.button?.image = LightningIcon.menuBarImage(color: .black)
         }
-    }
-
-    private func setWaveIcon(color: NSColor, title: String = "") {
-        stopAnimationTimer()
-        animationColor = color
-        animationPhase = 0
-        statusItem.button?.title = title.isEmpty ? "" : " \(title)"
-        statusItem.button?.toolTip = title.isEmpty ? nil : "Dictation \(title)"
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-            self.animationPhase += 0.35
-            self.statusItem.button?.image = WaveIcon.menuBarImage(color: self.animationColor, phase: self.animationPhase)
-        }
-        if let timer = animationTimer {
-            RunLoop.main.add(timer, forMode: .common)
-        }
-    }
-
-    private func stopAnimationTimer() {
-        animationTimer?.invalidate()
-        animationTimer = nil
-    }
-
-    private static func formatDuration(_ duration: TimeInterval) -> String {
-        let totalSeconds = max(0, Int(duration.rounded()))
-        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 
     private func showNotice(_ title: String, _ message: String) {
