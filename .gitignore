@@ -3,3 +3,5 @@
 AGENTS.md
 dist/
 .prd-runs/
+__pycache__/
+*.pyc
