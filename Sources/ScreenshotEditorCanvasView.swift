@@ -23,7 +23,11 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
     }
 
     var baseImage: CGImage {
-        didSet { updateFrameForContent(); needsDisplay = true }
+        didSet {
+            baseDisplayImage = NSImage(cgImage: baseImage, size: CGSize(width: baseImage.width, height: baseImage.height))
+            updateFrameForContent()
+            needsDisplay = true
+        }
     }
     var annotations: [ScreenshotAnnotation] = []
     var backdrop = ScreenshotBackdropSettings() {
@@ -43,6 +47,7 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
     private var nextNumber = 1
     private var textField: NSTextField?
     private var editingText: ScreenshotAnnotation?
+    private var baseDisplayImage: NSImage
 
     var onSelectionChanged: ((ScreenshotAnnotation?) -> Void)?
     var onDocumentChanged: (() -> Void)?
@@ -56,6 +61,7 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
 
     init(image: CGImage) {
         self.baseImage = image
+        self.baseDisplayImage = NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height))
         super.init(frame: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
@@ -83,6 +89,21 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        if annotations.isEmpty,
+           currentAnnotation == nil,
+           selectedAnnotation == nil,
+           cropRect == nil,
+           !backdrop.isEnabled {
+            baseDisplayImage.draw(
+                in: bounds,
+                from: CGRect(origin: .zero, size: baseDisplayImage.size),
+                operation: .copy,
+                fraction: 1,
+                respectFlipped: true,
+                hints: [.interpolation: NSImageInterpolation.high]
+            )
+            return
+        }
         guard let rendered = ScreenshotEditorRenderer.render(
             baseImage: baseImage,
             annotations: annotations + (currentAnnotation.map { [$0] } ?? []),
@@ -134,6 +155,15 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
 
         if event.modifierFlags.contains(.shift), backdrop.isEnabled, backdrop.backgroundImage != nil {
             dragMode = .backdropImage(lastPoint: point)
+            return
+        }
+        if currentTool == .number {
+            if let marker = numberAnnotation(at: point) {
+                select(marker)
+                dragMode = .moving(annotation: marker, lastPoint: point)
+            } else {
+                placeNumber(at: point)
+            }
             return
         }
 
@@ -188,18 +218,7 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
         case .text:
             beginTextEntry(at: point, editing: nil)
         case .number:
-            let annotation = ScreenshotAnnotation(
-                tool: .number,
-                start: point,
-                end: point,
-                color: currentColor,
-                strokeWidth: currentStrokeWidth,
-                number: nextNumber
-            )
-            annotations.append(annotation)
-            nextNumber += 1
-            onDocumentChanged?()
-            needsDisplay = true
+            break
         case .crop:
             cropRect = CGRect(origin: point, size: .zero)
             dragMode = .drawing
@@ -485,6 +504,13 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
         needsDisplay = true
     }
 
+    private func numberAnnotation(at point: CGPoint) -> ScreenshotAnnotation? {
+        annotations.reversed().first { annotation in
+            annotation.tool == .number
+                && ScreenshotEditorRenderer.selectionBounds(annotation).insetBy(dx: -10, dy: -10).contains(point)
+        }
+    }
+
     private func resizeCorner(at point: CGPoint, annotation: ScreenshotAnnotation) -> ResizeCorner? {
         guard ![.line, .arrow, .number, .magnifier, .backdrop].contains(annotation.tool) else { return nil }
         let rect = ScreenshotEditorRenderer.selectionBounds(annotation).insetBy(dx: -5, dy: -5)
@@ -614,6 +640,22 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
         window?.makeFirstResponder(self)
     }
 
+
+    private func placeNumber(at point: CGPoint) {
+        let annotation = ScreenshotAnnotation(
+            tool: .number,
+            start: point,
+            end: point,
+            color: currentColor,
+            strokeWidth: currentStrokeWidth,
+            number: nextNumber
+        )
+        annotations.append(annotation)
+        nextNumber += 1
+        select(annotation)
+        onDocumentChanged?()
+        needsDisplay = true
+    }
 
     private func renumber() {
         var number = 1

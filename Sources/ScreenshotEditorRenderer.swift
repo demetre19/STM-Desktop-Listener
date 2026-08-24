@@ -335,10 +335,14 @@ enum ScreenshotEditorRenderer {
             .foregroundColor: NSColor.white
         ])
         let line = CTLineCreateWithAttributedString(attributed)
-        let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+        let glyphBounds = CTLineGetBoundsWithOptions(line, [.useGlyphPathBounds])
         context.saveGState()
-        context.translateBy(x: annotation.start.x - width / 2, y: annotation.start.y + radius * 0.36)
+        context.translateBy(
+            x: annotation.start.x - glyphBounds.midX,
+            y: annotation.start.y + glyphBounds.midY
+        )
         context.scaleBy(x: 1, y: -1)
+        context.textPosition = .zero
         CTLineDraw(line, context)
         context.restoreGState()
     }

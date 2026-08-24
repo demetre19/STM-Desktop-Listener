@@ -16,6 +16,45 @@ struct ScreenshotEditorRendererTests {
             fail("could not render unmodified screenshot")
         }
         expect(pixelData(unmodified) == pixelData(base), "renderer preserves the source orientation and pixel layout")
+        let canvas = ScreenshotEditorCanvasView(image: base)
+        canvas.annotations = [
+            ScreenshotAnnotation(
+                tool: .box,
+                start: CGPoint(x: 120, y: 80),
+                end: CGPoint(x: 200, y: 160),
+                color: .systemRed,
+                strokeWidth: 6
+            )
+        ]
+        let canvasWindow = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        canvasWindow.contentView = canvas
+        canvas.selectTool(.number)
+        let markerPoints = [CGPoint(x: 140, y: 120), CGPoint(x: 180, y: 120)]
+        for point in markerPoints {
+            canvas.mouseDown(with: mouseEvent(.leftMouseDown, at: point, windowNumber: canvasWindow.windowNumber))
+        }
+        var numberedAnnotations = canvas.annotations.filter { $0.tool == .number }
+        expect(
+            numberedAnnotations.map(\.number) == [1, 2]
+                && zip(numberedAnnotations.map(\.start), markerPoints).allSatisfy { $0.0 == $0.1 },
+            "number clicks place a contiguous sequence above an existing box"
+        )
+
+        canvas.mouseDown(with: mouseEvent(.leftMouseDown, at: markerPoints[0], windowNumber: canvasWindow.windowNumber))
+        canvas.mouseDragged(with: mouseEvent(.leftMouseDragged, at: CGPoint(x: 100, y: 120), windowNumber: canvasWindow.windowNumber))
+        canvas.mouseUp(with: mouseEvent(.leftMouseUp, at: CGPoint(x: 100, y: 120), windowNumber: canvasWindow.windowNumber))
+        numberedAnnotations = canvas.annotations.filter { $0.tool == .number }
+        expect(
+            numberedAnnotations.count == 2
+                && numberedAnnotations[0].start == CGPoint(x: 100, y: 120)
+                && canvas.selectedAnnotation?.id == numberedAnnotations[0].id,
+            "clicking an existing number selects and moves it without creating another marker"
+        )
 
         let annotations = [
             annotation(.arrow, from: CGPoint(x: 20, y: 20), to: CGPoint(x: 110, y: 70), color: .systemRed),
@@ -33,6 +72,40 @@ struct ScreenshotEditorRendererTests {
         }
         expect(plain.width == 320 && plain.height == 240, "annotations preserve the base canvas size")
         expect(pixelData(plain) != pixelData(base), "annotation tools visibly alter rendered pixels")
+        guard let darkBase = makeSolidImage(width: 320, height: 240, color: .black) else {
+            fail("could not create number marker test image")
+        }
+        let numberValues = [1, 2, 3, 4]
+        let numberCenters = numberValues.indices.map { CGPoint(x: 50 + CGFloat($0) * 70, y: 120) }
+        let numberMarkers = zip(numberValues, numberCenters).map { value, center in
+            ScreenshotAnnotation(
+                tool: .number,
+                start: center,
+                end: center,
+                color: .systemRed,
+                strokeWidth: 10,
+                number: value
+            )
+        }
+        guard let renderedNumbers = ScreenshotEditorRenderer.render(
+            baseImage: darkBase,
+            annotations: numberMarkers,
+            backdrop: ScreenshotBackdropSettings()
+        ) else {
+            fail("could not render consecutive number markers")
+        }
+        for (value, center) in zip(numberValues, numberCenters) {
+            guard let bounds = whitePixelBounds(
+                renderedNumbers,
+                within: CGRect(x: center.x - 15, y: center.y - 15, width: 30, height: 30)
+            ) else {
+                fail("could not inspect number marker \(value)")
+            }
+            expect(
+                abs(bounds.midX - center.x) <= 1.5 && abs(bounds.midY - center.y) <= 1.5,
+                "consecutive number marker \(value) remains centered in its own badge"
+            )
+        }
 
         let arrowWidths: [CGFloat] = [3, 6, 10]
         let arrowPixelCounts = arrowWidths.compactMap { width -> Int? in
@@ -129,11 +202,28 @@ struct ScreenshotEditorRendererTests {
         }
         expect(cropped.width == 101 && cropped.height == 79, "crop preserves the selected pixel dimensions")
 
-        print("ScreenshotEditorRendererTests: all 8 checks passed")
+        print("ScreenshotEditorRendererTests: all 14 checks passed")
     }
 
     private static func annotation(_ tool: ScreenshotTool, from start: CGPoint, to end: CGPoint, color: NSColor) -> ScreenshotAnnotation {
         ScreenshotAnnotation(tool: tool, start: start, end: end, color: color, strokeWidth: 6)
+    }
+
+    private static func mouseEvent(_ type: NSEvent.EventType, at point: CGPoint, windowNumber: Int) -> NSEvent {
+        guard let event = NSEvent.mouseEvent(
+            with: type,
+            location: point,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ) else {
+            fail("could not create number tool mouse event")
+        }
+        return event
     }
 
     private static func makeBaseImage(width: Int, height: Int) -> CGImage? {
@@ -155,6 +245,21 @@ struct ScreenshotEditorRendererTests {
         return context.makeImage()
     }
 
+    private static func makeSolidImage(width: Int, height: Int, color: NSColor) -> CGImage? {
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.setFillColor(color.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
+    }
+
     private static func pixelData(_ image: CGImage) -> Data {
         image.dataProvider?.data as Data? ?? Data()
     }
@@ -171,6 +276,27 @@ struct ScreenshotEditorRendererTests {
         ) else { return Data() }
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         return context.makeImage()?.dataProvider?.data as Data? ?? Data()
+    }
+
+    private static func whitePixelBounds(_ image: CGImage, within rect: CGRect) -> CGRect? {
+        let bytes = pixelData(image)
+        let minX = max(0, Int(rect.minX))
+        let maxX = min(image.width - 1, Int(rect.maxX))
+        let minY = max(0, Int(rect.minY))
+        let maxY = min(image.height - 1, Int(rect.maxY))
+        var bounds: CGRect?
+        bytes.withUnsafeBytes { raw in
+            let rgba = raw.bindMemory(to: UInt8.self)
+            for y in minY...maxY {
+                for x in minX...maxX {
+                    let index = (y * image.width + x) * 4
+                    guard rgba[index] > 220, rgba[index + 1] > 220, rgba[index + 2] > 220 else { continue }
+                    let pixel = CGRect(x: x, y: y, width: 1, height: 1)
+                    bounds = bounds.map { $0.union(pixel) } ?? pixel
+                }
+            }
+        }
+        return bounds
     }
 
     private static func redPixelCount(_ image: CGImage) -> Int {
