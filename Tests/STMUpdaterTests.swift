@@ -220,6 +220,18 @@ struct STMUpdaterTests {
         let tag = "v\(version)"
         let dmgName = "STM-Desktop-Listener-Mac-arm64-v\(version).dmg"
         let base = "https://github.com/demetre19/STM-Desktop-Listener-Releases"
+        let assets: [[String: Any]] = [
+            [
+                "name": dmgName,
+                "browser_download_url": "\(base)/releases/download/\(tag)/\(dmgName)",
+                "size": 123,
+            ],
+            [
+                "name": "SHA256SUMS.txt",
+                "browser_download_url": "\(base)/releases/download/\(tag)/SHA256SUMS.txt",
+                "size": 128,
+            ],
+        ]
         return [
             "tag_name": tag,
             "html_url": "\(base)/releases/tag/\(tag)",
@@ -227,18 +239,7 @@ struct STMUpdaterTests {
             "prerelease": prerelease,
             "published_at": "2026-08-24T12:00:00Z",
             "body": "Faster capture and safer update checks.",
-            "assets": [
-                [
-                    "name": dmgName,
-                    "browser_download_url": "\(base)/releases/download/\(tag)/\(dmgName)",
-                    "size": 123,
-                ],
-                [
-                    "name": "SHA256SUMS.txt",
-                    "browser_download_url": "\(base)/releases/download/\(tag)/SHA256SUMS.txt",
-                    "size": 128,
-                ],
-            ],
+            "assets": assets,
         ]
     }
 

@@ -13,100 +13,170 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Build, gate, and publish
+  build:
+    if: github.ref_protected == true
+    name: Build and gate release
     runs-on: macos-14
     timeout-minutes: 45
 
     steps:
-      - name: Check out the exact source tag
-        uses: actions/checkout@v4
+      - name: Check out the protected source tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.ref }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Prove updater security and version behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun swiftc Sources/STMUpdater.swift Tests/STMUpdaterTests.swift -o "$RUNNER_TEMP/stm-updater-tests"
+          "$RUNNER_TEMP/stm-updater-tests"
 
       - name: Build and validate release assets
         id: assets
         shell: bash
         run: .github/scripts/prepare-release.sh "${GITHUB_REF_NAME}"
 
+      - name: Require annotated user-visible release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git cat-file -t "$GITHUB_REF_NAME")" == "tag" ]] || {
+            echo "Release tags must be annotated with user-visible release notes." >&2
+            exit 1
+          }
+          git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME" > dist/RELEASE_NOTES.txt
+          [[ -s dist/RELEASE_NOTES.txt ]] || {
+            echo "The annotated release tag has no user-visible release notes." >&2
+            exit 1
+          }
+
+      - name: Stage credential-free release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stm-release-${{ github.ref_name }}
+          path: |
+            ${{ steps.assets.outputs.dmg_path }}
+            ${{ steps.assets.outputs.zip_path }}
+            ${{ steps.assets.outputs.checksums_path }}
+            dist/RELEASE_NOTES.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    if: github.ref_protected == true
+    name: Publish protected release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: public-release
+
+    steps:
+      - name: Download gated release bundle on a clean runner
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: stm-release-${{ github.ref_name }}
+          path: release
+
+      - name: Revalidate isolated bundle before exposing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          stem="STM-Desktop-Listener-Mac-arm64-v$version"
+          expected=("$stem.dmg" "$stem.zip" "SHA256SUMS.txt" "RELEASE_NOTES.txt")
+          for name in "${expected[@]}"; do
+            [[ -s "release/$name" ]] || {
+              echo "Missing or empty isolated release file: $name" >&2
+              exit 1
+            }
+          done
+          [[ "$(find release -maxdepth 1 -type f | wc -l | tr -d ' ')" == "4" ]] || {
+            echo "Unexpected files found in isolated release bundle." >&2
+            exit 1
+          }
+          (cd release && shasum -a 256 -c SHA256SUMS.txt)
+
       - name: Create validated draft and publish it
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.STM_RELEASES_TOKEN }}
           PUBLIC_REPO: demetre19/STM-Desktop-Listener-Releases
-          RELEASE_TAG: ${{ steps.assets.outputs.tag }}
-          RELEASE_VERSION: ${{ steps.assets.outputs.version }}
-          IS_PRERELEASE: ${{ steps.assets.outputs.prerelease }}
-          DMG_PATH: ${{ steps.assets.outputs.dmg_path }}
-          ZIP_PATH: ${{ steps.assets.outputs.zip_path }}
-          CHECKSUMS_PATH: ${{ steps.assets.outputs.checksums_path }}
         run: |
           set -euo pipefail
-
           [[ -n "${GH_TOKEN:-}" ]] || {
             echo "STM_RELEASES_TOKEN is not configured." >&2
             exit 1
           }
 
-          if gh release view "$RELEASE_TAG" --repo "$PUBLIC_REPO" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists in $PUBLIC_REPO; tags are immutable." >&2
+          release_tag="$GITHUB_REF_NAME"
+          release_version="${release_tag#v}"
+          stem="STM-Desktop-Listener-Mac-arm64-v$release_version"
+          dmg_path="release/$stem.dmg"
+          zip_path="release/$stem.zip"
+          checksums_path="release/SHA256SUMS.txt"
+          release_changes="$(cat release/RELEASE_NOTES.txt)"
+          is_prerelease=false
+          [[ "$release_version" == *-* ]] && is_prerelease=true
+
+          if gh release view "$release_tag" --repo "$PUBLIC_REPO" >/dev/null 2>&1; then
+            echo "Release $release_tag already exists in $PUBLIC_REPO; tags are immutable." >&2
             exit 1
           fi
 
           notes_file="$RUNNER_TEMP/stm-release-notes.txt"
           cat > "$notes_file" <<NOTES
-          STM Desktop Listener v${RELEASE_VERSION}
+          STM Desktop Listener v${release_version}
 
           Precompiled release for Apple silicon (arm64) Macs running macOS 14 or later.
+
+          What's new:
+
+          ${release_changes}
 
           Download the DMG or ZIP and SHA256SUMS.txt, then verify the package checksum before opening it:
 
               shasum -a 256 -c SHA256SUMS.txt
 
-          This initial package is ad hoc signed and is not Apple-notarized. Installation remains a manual user action; the app does not replace itself.
+          This package is ad hoc signed and is not Apple-notarized. Installation remains a manual user action; the app does not replace itself.
           NOTES
 
           release_args=(
-            "$RELEASE_TAG"
-            "$DMG_PATH"
-            "$ZIP_PATH"
-            "$CHECKSUMS_PATH"
+            "$release_tag"
+            "$dmg_path"
+            "$zip_path"
+            "$checksums_path"
             --repo "$PUBLIC_REPO"
-            --title "STM Desktop Listener v${RELEASE_VERSION}"
+            --title "STM Desktop Listener v${release_version}"
             --notes-file "$notes_file"
             --draft
           )
-          if [[ "$IS_PRERELEASE" == "true" ]]; then
-            release_args+=(--prerelease)
-          fi
-
+          [[ "$is_prerelease" == "true" ]] && release_args+=(--prerelease)
           gh release create "${release_args[@]}"
 
-          release_id="$(gh api "repos/$PUBLIC_REPO/releases/tags/$RELEASE_TAG" --jq '.id')"
+          release_id="$(gh api "repos/$PUBLIC_REPO/releases/tags/$release_tag" --jq '.id')"
           [[ -n "$release_id" ]] || {
             echo "Draft release could not be read back." >&2
             exit 1
           }
           draft_state="$(gh api "repos/$PUBLIC_REPO/releases/$release_id" --jq '.draft')"
           prerelease_state="$(gh api "repos/$PUBLIC_REPO/releases/$release_id" --jq '.prerelease')"
-          [[ "$draft_state" == "true" && "$prerelease_state" == "$IS_PRERELEASE" ]] || {
+          [[ "$draft_state" == "true" && "$prerelease_state" == "$is_prerelease" ]] || {
             echo "Release metadata verification failed; the release will remain unpublished." >&2
             exit 1
           }
 
-
           expected_assets="$(
-            printf '%s\t%s\n' "$(basename "$DMG_PATH")" "$(stat -f '%z' "$DMG_PATH")"
-            printf '%s\t%s\n' "$(basename "$ZIP_PATH")" "$(stat -f '%z' "$ZIP_PATH")"
-            printf '%s\t%s\n' "$(basename "$CHECKSUMS_PATH")" "$(stat -f '%z' "$CHECKSUMS_PATH")"
+            printf '%s\t%s\n' "$(basename "$dmg_path")" "$(stat -c '%s' "$dmg_path")"
+            printf '%s\t%s\n' "$(basename "$zip_path")" "$(stat -c '%s' "$zip_path")"
+            printf '%s\t%s\n' "$(basename "$checksums_path")" "$(stat -c '%s' "$checksums_path")"
           )"
           actual_assets="$(
             gh api "repos/$PUBLIC_REPO/releases/$release_id" \
               --jq '.assets[] | select(.state == "uploaded" and .size > 0) | [.name, (.size | tostring)] | @tsv'
           )"
-
           if [[ "$(printf '%s\n' "$actual_assets" | LC_ALL=C sort)" != "$(printf '%s\n' "$expected_assets" | LC_ALL=C sort)" ]]; then
             echo "Draft asset verification failed; the release will remain unpublished." >&2
             exit 1
@@ -117,4 +187,4 @@ jobs:
             echo "Release publication could not be confirmed." >&2
             exit 1
           }
-          echo "Published $PUBLIC_REPO release $RELEASE_TAG with all required assets."
+          echo "Published $PUBLIC_REPO release $release_tag with all required assets."

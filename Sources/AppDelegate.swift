@@ -596,6 +596,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Available: \(release.version.description)
         Release channel: \(releaseLabel)
         Published: \(published)
+        Architecture: Apple silicon (arm64)
+        Requires: macOS 14 or later
+        Trust: Ad hoc signed, not Apple-notarized
 
         \(releaseNotes)
 
