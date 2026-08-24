@@ -55,6 +55,14 @@ struct ScreenshotEditorRendererTests {
                 && canvas.selectedAnnotation?.id == numberedAnnotations[0].id,
             "clicking an existing number selects and moves it without creating another marker"
         )
+        canvas.selectTool(.text)
+        canvas.mouseDown(with: mouseEvent(.leftMouseDown, at: CGPoint(x: 160, y: 120), windowNumber: canvasWindow.windowNumber))
+        expect(
+            canvas.subviews.contains { $0 is NSTextField },
+            "text tool starts a new text entry inside an existing annotation"
+        )
+        canvas.cancelOperation(nil)
+
 
         let annotations = [
             annotation(.arrow, from: CGPoint(x: 20, y: 20), to: CGPoint(x: 110, y: 70), color: .systemRed),

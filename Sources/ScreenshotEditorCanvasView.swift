@@ -145,12 +145,23 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
         let viewPoint = convert(event.locationInWindow, from: nil)
         let point = imagePoint(from: viewPoint)
         if event.clickCount == 2,
-           let annotation = annotation(at: point),
-           annotation.tool == .text {
+           let annotation = textAnnotation(at: point) {
             select(annotation)
             beginTextEntry(at: annotation.start, editing: annotation)
             return
         }
+
+        if currentTool == .text {
+            if let annotation = textAnnotation(at: point) {
+                select(annotation)
+                beginTextEntry(at: annotation.start, editing: annotation)
+            } else {
+                select(nil)
+                beginTextEntry(at: point, editing: nil)
+            }
+            return
+        }
+
 
 
         if event.modifierFlags.contains(.shift), backdrop.isEnabled, backdrop.backgroundImage != nil {
@@ -492,6 +503,13 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
         }
         return nil
     }
+    private func textAnnotation(at point: CGPoint) -> ScreenshotAnnotation? {
+        annotations.reversed().first { annotation in
+            annotation.tool == .text
+                && ScreenshotEditorRenderer.selectionBounds(annotation).insetBy(dx: -10, dy: -10).contains(point)
+        }
+    }
+
 
     private func select(_ annotation: ScreenshotAnnotation?) {
         selectedAnnotation = annotation
