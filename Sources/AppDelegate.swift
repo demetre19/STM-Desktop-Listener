@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillTerminate(_ notification: Notification) {
         Logger.log("runtime app event=willTerminate")
+        features.stopCaptureCache()
         features.dictation.cancel()
         automaticUpdateCheckTask?.cancel()
         automaticUpdateCheckTask = nil
@@ -104,6 +105,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationDidUnhide(_ notification: Notification) {
         Logger.log("runtime app event=didUnhide")
     }
+    func applicationDidChangeScreenParameters(_ notification: Notification) {
+        features.screenConfigurationChanged()
+    }
+
 
     private func setupRuntimeEventLogging() {
         let events: [(Notification.Name, String)] = [

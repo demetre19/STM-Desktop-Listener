@@ -39,15 +39,16 @@ final class SelectionOverlayController {
         for screen in NSScreen.screens {
             let window = makeWindow(for: screen)
             let snapshot = snapshots.first { $0.screenFrame.intersects(screen.frame) }
-            let view = SelectionOverlayView(
+            let contentView = SelectionOverlayContentView(
                 frame: NSRect(origin: .zero, size: screen.frame.size),
                 screenFrame: screen.frame,
                 label: label,
                 frozenImage: snapshot?.image
             )
+            let view = contentView.selectionView
             view.onComplete = { [weak self] rect in self?.finish(rect) }
             view.onCancel = { [weak self] in self?.finish(nil) }
-            window.contentView = view
+            window.contentView = contentView
             window.makeKeyAndOrderFront(nil)
             windows.append(window)
         }
@@ -160,23 +161,52 @@ final class OverlayWindow: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+private final class SelectionOverlayContentView: NSView {
+    let selectionView: SelectionOverlayView
+
+    init(frame: CGRect, screenFrame: CGRect, label: String, frozenImage: CGImage?) {
+        selectionView = SelectionOverlayView(
+            frame: frame,
+            screenFrame: screenFrame,
+            label: label,
+            hasFrozenImage: frozenImage != nil
+        )
+        super.init(frame: frame)
+        autoresizingMask = [.width, .height]
+
+        if let frozenImage {
+            let imageView = NSImageView(frame: bounds)
+            imageView.autoresizingMask = [.width, .height]
+            imageView.imageScaling = .scaleAxesIndependently
+            imageView.image = NSImage(cgImage: frozenImage, size: frame.size)
+            addSubview(imageView)
+        }
+
+        selectionView.autoresizingMask = [.width, .height]
+        addSubview(selectionView)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+}
+
 final class SelectionOverlayView: NSView {
     let screenFrame: CGRect
     let label: String
-    let frozenImage: CGImage?
-    private let frozenNSImage: NSImage?
+    let hasFrozenImage: Bool
     var onComplete: ((CGRect) -> Void)?
     var onCancel: (() -> Void)?
     private var start: CGPoint?
     private var current: CGPoint?
 
-    init(frame: CGRect, screenFrame: CGRect, label: String, frozenImage: CGImage?) {
+    init(frame: CGRect, screenFrame: CGRect, label: String, hasFrozenImage: Bool) {
         self.screenFrame = screenFrame
         self.label = label
-        self.frozenImage = frozenImage
-        self.frozenNSImage = frozenImage.map { NSImage(cgImage: $0, size: frame.size) }
+        self.hasFrozenImage = hasFrozenImage
         super.init(frame: frame)
         wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
     }
 
     required init?(coder: NSCoder) {
@@ -194,17 +224,13 @@ final class SelectionOverlayView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        drawFrozenImage()
-
-        NSColor(calibratedWhite: 0, alpha: frozenImage == nil ? 0.28 : 0.22).setFill()
+        NSColor(calibratedWhite: 0, alpha: hasFrozenImage ? 0.22 : 0.28).setFill()
         bounds.fill()
 
         if let rect = localSelectionRect() {
-            if frozenImage == nil {
+            if hasFrozenImage {
                 NSColor.clear.setFill()
-                rect.fill(using: .clear)
-            } else {
-                drawFrozenImage(clippedTo: rect)
+                rect.fill(using: .copy)
             }
             NSColor.systemCyan.setStroke()
             let path = NSBezierPath(rect: rect)
@@ -218,17 +244,19 @@ final class SelectionOverlayView: NSView {
         }
     }
 
-    private func drawFrozenImage(clippedTo rect: CGRect? = nil) {
-        guard let image = frozenNSImage else { return }
-        NSGraphicsContext.current?.imageInterpolation = .none
-        if let rect = rect {
-            NSGraphicsContext.saveGraphicsState()
-            NSBezierPath(rect: rect).addClip()
-            image.draw(in: bounds)
-            NSGraphicsContext.restoreGraphicsState()
-        } else {
-            image.draw(in: bounds)
+    private func selectionDisplayRect(_ rect: CGRect) -> CGRect {
+        let sizeLabel = CGRect(x: rect.maxX + 4, y: rect.minY - 30, width: 140, height: 34)
+        return rect.union(sizeLabel).insetBy(dx: -4, dy: -4)
+    }
+
+    private func updateDrag(to point: CGPoint) {
+        let previous = localSelectionRect()
+        current = point
+        guard let previous, let current = localSelectionRect() else {
+            needsDisplay = true
+            return
         }
+        setNeedsDisplay(selectionDisplayRect(previous).union(selectionDisplayRect(current)))
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -238,8 +266,7 @@ final class SelectionOverlayView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        current = event.locationInWindow
-        needsDisplay = true
+        updateDrag(to: event.locationInWindow)
     }
 
     override func mouseUp(with event: NSEvent) {

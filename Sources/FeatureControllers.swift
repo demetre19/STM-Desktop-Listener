@@ -31,7 +31,22 @@ final class FeatureRunner {
 
     func featureStateChanged() {
         mouseJiggler.restoreIfNeeded(featureEnabled: ConfigStore.featureEnabled(.mouseJiggler))
+        if ConfigStore.featureEnabled(.screenshot) {
+            capture.prepareVisibleSnapshotCache()
+        } else {
+            capture.stopVisibleSnapshotCache()
+        }
     }
+
+    func screenConfigurationChanged() {
+        guard ConfigStore.featureEnabled(.screenshot) else { return }
+        capture.refreshVisibleSnapshotCache()
+    }
+
+    func stopCaptureCache() {
+        capture.stopVisibleSnapshotCache()
+    }
+
 
 
     func run(_ feature: FeatureID) {
@@ -86,10 +101,8 @@ final class FeatureRunner {
             Logger.log("screenshot ignored because capture is already active")
             return
         }
-        guard PermissionCenter.ensureScreenAccess() else {
-            onNotice?("Screen permission needed", "Grant Screen Recording permission, then try again.")
-            return
-        }
+        // The stream cache is already authorized and warm. Rechecking TCC here can
+        // synchronously stall the shortcut for seconds.
         screenshotInFlight = true
         if let rect = measurement.captureRect {
             captureScreenshot(rect: rect, clearMeasurementAfter: true)
@@ -116,7 +129,11 @@ final class FeatureRunner {
             }
         } catch {
             screenshotInFlight = false
-            onError?("Screenshot failed", error.localizedDescription)
+            if !PermissionCenter.hasScreenAccess() {
+                onNotice?("Screen permission needed", "Grant Screen Recording permission, then try again.")
+            } else {
+                onError?("Screenshot failed", error.localizedDescription)
+            }
         }
     }
 

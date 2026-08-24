@@ -3,6 +3,8 @@ import CoreGraphics
 import CoreImage
 import CoreMedia
 import ScreenCaptureKit
+import CoreVideo
+
 
 struct ColorPreview {
     let image: CGImage
@@ -53,6 +55,20 @@ struct ScreenSnapshot {
 }
 
 final class CaptureService {
+    private let visibleFrameCache = ScreenFrameCache()
+
+    func prepareVisibleSnapshotCache() {
+        visibleFrameCache.start()
+    }
+
+    func refreshVisibleSnapshotCache() {
+        visibleFrameCache.restart()
+    }
+
+    func stopVisibleSnapshotCache() {
+        visibleFrameCache.stop()
+    }
+
     func capturePNG(rect appKitRect: CGRect, assumePermissionGranted: Bool = false) throws -> Data {
         let image = try captureImage(rect: appKitRect, assumePermissionGranted: assumePermissionGranted)
         let bitmap = NSBitmapImageRep(cgImage: image)
@@ -104,6 +120,11 @@ final class CaptureService {
         let screensStarted = Date()
         let screens = NSScreen.screens
         Logger.log("capture visible snapshots screensMs=\(Int(Date().timeIntervalSince(screensStarted) * 1000)) count=\(screens.count)")
+        if let snapshots = visibleFrameCache.snapshots(for: screens) {
+            Logger.log("capture visible snapshots totalMs=\(Int(Date().timeIntervalSince(totalStarted) * 1000)) count=\(snapshots.count) assumePermission=\(assumePermissionGranted) source=stream-cache")
+            return snapshots
+        }
+
         let snapshots = screens.compactMap { screen -> ScreenSnapshot? in
             let screenStarted = Date()
             guard let image = captureVisibleWindowServerImage(rect: screen.frame) else {
@@ -117,7 +138,7 @@ final class CaptureService {
         guard !snapshots.isEmpty else {
             throw SimpleError("Could not freeze the visible screen before selection.")
         }
-        Logger.log("capture visible snapshots totalMs=\(Int(Date().timeIntervalSince(totalStarted) * 1000)) count=\(snapshots.count) assumePermission=\(assumePermissionGranted)")
+        Logger.log("capture visible snapshots totalMs=\(Int(Date().timeIntervalSince(totalStarted) * 1000)) count=\(snapshots.count) assumePermission=\(assumePermissionGranted) source=windowserver")
         return snapshots
     }
 
@@ -302,6 +323,206 @@ final class CaptureService {
             width: min(width, max(1, snapshot.image.width - x)),
             height: min(height, max(1, snapshot.image.height - y))
         )
+    }
+}
+
+private final class ScreenFrameCache: NSObject, SCStreamOutput {
+    private struct ScreenSpec {
+        let displayID: CGDirectDisplayID
+        let frame: CGRect
+        let scale: CGFloat
+        let pixelWidth: Int
+        let pixelHeight: Int
+
+        init?(screen: NSScreen) {
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return nil
+            }
+            displayID = CGDirectDisplayID(number.uint32Value)
+            frame = screen.frame
+            scale = screen.backingScaleFactor
+            pixelWidth = max(1, Int(round(screen.frame.width * scale)))
+            pixelHeight = max(1, Int(round(screen.frame.height * scale)))
+        }
+    }
+
+    private let frameQueue = DispatchQueue(
+        label: "com.seotimemachines.stm-desktop-listener.screen-frame-cache",
+        qos: .userInteractive
+    )
+    private let lock = NSLock()
+    private let imageContext = CIContext(options: [.cacheIntermediates: false])
+    private var streams: [CGDirectDisplayID: SCStream] = [:]
+    private var displayByStream: [ObjectIdentifier: CGDirectDisplayID] = [:]
+    private var frames: [CGDirectDisplayID: CVPixelBuffer] = [:]
+    private var stoppingStreams: [ObjectIdentifier: SCStream] = [:]
+    private var generation = 0
+    private var starting = false
+
+    func start() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !starting, streams.isEmpty else { return }
+        let specs = NSScreen.screens.compactMap(ScreenSpec.init)
+        guard !specs.isEmpty else { return }
+        starting = true
+        generation += 1
+        let requestedGeneration = generation
+
+        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { [weak self] content, error in
+            DispatchQueue.main.async {
+                self?.configure(
+                    content: content,
+                    error: error,
+                    specs: specs,
+                    generation: requestedGeneration
+                )
+            }
+        }
+    }
+
+    func restart() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        stopStreams { [weak self] in
+            self?.start()
+        }
+    }
+
+    func stop() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        stopStreams()
+    }
+
+    private func stopStreams(completion: (() -> Void)? = nil) {
+        generation += 1
+        let activeStreams = Array(streams.values)
+        streams.removeAll()
+        starting = false
+        lock.lock()
+        displayByStream.removeAll()
+        frames.removeAll()
+        lock.unlock()
+        guard !activeStreams.isEmpty else {
+            completion?()
+            return
+        }
+
+        var remaining = activeStreams.count
+        activeStreams.forEach { stream in
+            let identifier = ObjectIdentifier(stream)
+            stoppingStreams[identifier] = stream
+            stream.stopCapture { [weak self] error in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.stoppingStreams.removeValue(forKey: identifier)
+                    if let error {
+                        Logger.log("capture stream cache stop failed error=\(error.localizedDescription)")
+                    }
+                    remaining -= 1
+                    if remaining == 0 {
+                        completion?()
+                    }
+                }
+            }
+        }
+    }
+
+    func snapshots(for screens: [NSScreen]) -> [ScreenSnapshot]? {
+        let specs = screens.compactMap(ScreenSpec.init)
+        guard specs.count == screens.count, !specs.isEmpty else { return nil }
+
+        lock.lock()
+        let cachedFrames = specs.compactMap { spec -> (ScreenSpec, CVPixelBuffer)? in
+            guard let frame = frames[spec.displayID] else { return nil }
+            return (spec, frame)
+        }
+        lock.unlock()
+        guard cachedFrames.count == specs.count else { return nil }
+
+        let started = Date()
+        let snapshots = cachedFrames.compactMap { spec, pixelBuffer -> ScreenSnapshot? in
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            let rect = CGRect(
+                x: 0,
+                y: 0,
+                width: CVPixelBufferGetWidth(pixelBuffer),
+                height: CVPixelBufferGetHeight(pixelBuffer)
+            )
+            guard let image = imageContext.createCGImage(ciImage, from: rect) else { return nil }
+            let scale = CGFloat(image.width) / max(1, spec.frame.width)
+            return ScreenSnapshot(screenFrame: spec.frame, scale: scale, image: image)
+        }
+        guard snapshots.count == specs.count else { return nil }
+        Logger.log("capture stream cache snapshotMs=\(Int(Date().timeIntervalSince(started) * 1000)) count=\(snapshots.count)")
+        return snapshots
+    }
+
+    private func configure(
+        content: SCShareableContent?,
+        error: Error?,
+        specs: [ScreenSpec],
+        generation requestedGeneration: Int
+    ) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard requestedGeneration == generation else { return }
+        starting = false
+        if let error {
+            Logger.log("capture stream cache unavailable error=\(error.localizedDescription)")
+            return
+        }
+        guard let content else {
+            Logger.log("capture stream cache unavailable error=no-shareable-content")
+            return
+        }
+
+        for spec in specs {
+            guard let display = content.displays.first(where: { $0.displayID == spec.displayID }) else {
+                Logger.log("capture stream cache display missing id=\(spec.displayID)")
+                continue
+            }
+            let configuration = SCStreamConfiguration()
+            configuration.width = spec.pixelWidth
+            configuration.height = spec.pixelHeight
+            configuration.pixelFormat = kCVPixelFormatType_32BGRA
+            configuration.showsCursor = false
+            configuration.queueDepth = 2
+            configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
+            do {
+                try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: frameQueue)
+                lock.lock()
+                displayByStream[ObjectIdentifier(stream)] = spec.displayID
+                lock.unlock()
+                streams[spec.displayID] = stream
+                stream.startCapture { error in
+                    if let error {
+                        Logger.log("capture stream cache start failed id=\(spec.displayID) error=\(error.localizedDescription)")
+                    } else {
+                        Logger.log("capture stream cache started id=\(spec.displayID) pixels=\(spec.pixelWidth)x\(spec.pixelHeight)")
+                    }
+                }
+            } catch {
+                Logger.log("capture stream cache setup failed id=\(spec.displayID) error=\(error.localizedDescription)")
+            }
+        }
+    }
+
+    func stream(
+        _ stream: SCStream,
+        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+        of type: SCStreamOutputType
+    ) {
+        guard type == .screen,
+              sampleBuffer.isValid,
+              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            return
+        }
+        lock.lock()
+        if let displayID = displayByStream[ObjectIdentifier(stream)] {
+            frames[displayID] = pixelBuffer
+        }
+        lock.unlock()
     }
 }
 
