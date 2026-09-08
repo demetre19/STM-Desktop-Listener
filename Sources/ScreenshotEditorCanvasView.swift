@@ -152,16 +152,22 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
         }
 
         if currentTool == .text {
+            // Shottr parity: single click on an existing callout selects it so it can be moved or its
+            // nub pulled; double-click edits. Clicking empty canvas starts a new entry.
+            if let selectedAnnotation, selectedAnnotation.tool == .text,
+               distance(point, ScreenshotEditorRenderer.textTailHandlePosition(selectedAnnotation)) <= 15 {
+                dragMode = .textTail(annotation: selectedAnnotation)
+                return
+            }
             if let annotation = textAnnotation(at: point) {
                 select(annotation)
-                beginTextEntry(at: annotation.start, editing: annotation)
+                dragMode = .moving(annotation: annotation, lastPoint: point)
             } else {
                 select(nil)
                 beginTextEntry(at: point, editing: nil)
             }
             return
         }
-
 
 
         if event.modifierFlags.contains(.shift), backdrop.isEnabled, backdrop.backgroundImage != nil {
@@ -518,7 +524,8 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
     private func textAnnotation(at point: CGPoint) -> ScreenshotAnnotation? {
         annotations.reversed().first { annotation in
             annotation.tool == .text
-                && ScreenshotEditorRenderer.selectionBounds(annotation).insetBy(dx: -10, dy: -10).contains(point)
+                && (ScreenshotEditorRenderer.selectionBounds(annotation).insetBy(dx: -10, dy: -10).contains(point)
+                    || ScreenshotEditorRenderer.textCalloutPath(annotation).contains(point))
         }
     }
 

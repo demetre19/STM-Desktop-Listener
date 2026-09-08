@@ -212,7 +212,7 @@ struct ScreenshotEditorRendererTests {
 
         runCalloutChecks()
 
-        print("ScreenshotEditorRendererTests: all 24 checks passed")
+        print("ScreenshotEditorRendererTests: all 27 checks passed")
     }
 
     /// Shottr-parity text callout: flat by default, flush nub, blob tail that follows the tip, hit-testable, never exported.
@@ -293,6 +293,24 @@ struct ScreenshotEditorRendererTests {
         canvas.mouseDragged(with: mouseEvent(.leftMouseDragged, at: inside, windowNumber: window.windowNumber))
         canvas.mouseUp(with: mouseEvent(.leftMouseUp, at: inside, windowNumber: window.windowNumber))
         expect(callout.tailPoint == nil, "dragging the tip back into the box returns the callout to flat")
+
+        // With the Text tool still active (the state right after typing), a single click moves the box
+        // and dragging the flush nub grows the tail; neither may open the text editor.
+        canvas.selectTool(.text)
+        let startX = callout.start.x
+        let grab = windowPoint(CGPoint(x: rect.midX, y: rect.midY))
+        canvas.mouseDown(with: mouseEvent(.leftMouseDown, at: grab, windowNumber: window.windowNumber))
+        canvas.mouseDragged(with: mouseEvent(.leftMouseDragged, at: CGPoint(x: grab.x + 30, y: grab.y), windowNumber: window.windowNumber))
+        canvas.mouseUp(with: mouseEvent(.leftMouseUp, at: CGPoint(x: grab.x + 30, y: grab.y), windowNumber: window.windowNumber))
+        expect(abs(callout.start.x - (startX + 30)) < 0.5, "text tool single click moves the selected callout")
+        expect(!canvas.subviews.contains { $0 is NSTextField }, "text tool single click on a callout does not open the editor")
+        let movedRect = ScreenshotEditorRenderer.selectionBounds(callout)
+        let flushNub = windowPoint(CGPoint(x: movedRect.midX, y: movedRect.maxY))
+        let pulled = windowPoint(CGPoint(x: movedRect.midX + 30, y: movedRect.maxY + 70))
+        canvas.mouseDown(with: mouseEvent(.leftMouseDown, at: flushNub, windowNumber: window.windowNumber))
+        canvas.mouseDragged(with: mouseEvent(.leftMouseDragged, at: pulled, windowNumber: window.windowNumber))
+        canvas.mouseUp(with: mouseEvent(.leftMouseUp, at: pulled, windowNumber: window.windowNumber))
+        expect(callout.tailPoint != nil && abs(callout.tailPoint!.y - (movedRect.maxY + 70)) < 0.5, "pulling the flush nub with the text tool grows the tail to the pointer")
     }
 
     private static func annotation(_ tool: ScreenshotTool, from start: CGPoint, to end: CGPoint, color: NSColor) -> ScreenshotAnnotation {
