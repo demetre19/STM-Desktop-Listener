@@ -337,36 +337,43 @@ enum ScreenshotCalloutGeometry {
         let horizontal = side == .top || side == .bottom
         let edgeLength = horizontal ? rect.width : rect.height
         let edgeCoord = side == .top ? rect.minY : side == .bottom ? rect.maxY : side == .left ? rect.minX : rect.maxX
-        var along = horizontal ? tip.x : tip.y
         let tailLength = horizontal ? abs(tip.y - edgeCoord) : abs(tip.x - edgeCoord)
         let baseWidth = max(18, min(0.6 * edgeLength, 30 + 0.22 * tailLength))
-        let edgeMin = (horizontal ? rect.minX : rect.minY) + cornerRadius + jointRadius + baseWidth / 2
-        let edgeMax = (horizontal ? rect.maxX : rect.maxY) - cornerRadius - jointRadius - baseWidth / 2
-        along = min(max(along, edgeMin), max(edgeMin, edgeMax))
         let half = baseWidth / 2
-        // Base points ordered so they appear in clockwise traversal along the attached edge.
-        func basePoint(_ offset: CGFloat) -> CGPoint {
-            horizontal ? CGPoint(x: along + offset, y: edgeCoord) : CGPoint(x: edgeCoord, y: along + offset)
+        let lo = horizontal ? rect.minX : rect.minY
+        let hi = horizontal ? rect.maxX : rect.maxY
+        // Keep the base inside the edge; when the tip is out past a corner the near base point
+        // lands on that corner and the tail's near side runs straight from it (no concave joint),
+        // which avoids a spur between the joint fillet and the corner round.
+        let along = min(max(horizontal ? tip.x : tip.y, lo + half), hi - half)
+        var nearLo = along - half
+        var nearHi = along + half
+        let cornerZone = cornerRadius + jointRadius
+        let snapLo = nearLo < lo + cornerZone
+        let snapHi = nearHi > hi - cornerZone
+        if snapLo { nearLo = lo }
+        if snapHi { nearHi = hi }
+        func basePoint(_ coordinate: CGFloat) -> CGPoint {
+            horizontal ? CGPoint(x: coordinate, y: edgeCoord) : CGPoint(x: edgeCoord, y: coordinate)
         }
         let joint: CGFloat = min(jointRadius, half * 0.9)
-
-        let tl = CGPoint(x: rect.minX, y: rect.minY), tr = CGPoint(x: rect.maxX, y: rect.minY)
-        let br = CGPoint(x: rect.maxX, y: rect.maxY), bl = CGPoint(x: rect.minX, y: rect.maxY)
         let c = cornerRadius
-        let tail: [(CGPoint, CGFloat)]
+        let pLo = (basePoint(nearLo), snapLo ? c : joint)
+        let pHi = (basePoint(nearHi), snapHi ? c : joint)
+        let apex = (tip, tipRadius)
+
+        let tl = (CGPoint(x: rect.minX, y: rect.minY), c), tr = (CGPoint(x: rect.maxX, y: rect.minY), c)
+        let br = (CGPoint(x: rect.maxX, y: rect.maxY), c), bl = (CGPoint(x: rect.minX, y: rect.maxY), c)
+        // Clockwise traversal; a snapped base point replaces the corner it sits on.
         switch side {
         case .top:
-            tail = [(basePoint(-half), joint), (tip, tipRadius), (basePoint(half), joint)]
-            return [(tl, c)] + tail + [(tr, c), (br, c), (bl, c)]
+            return (snapLo ? [] : [tl]) + [pLo, apex, pHi] + (snapHi ? [] : [tr]) + [br, bl]
         case .right:
-            tail = [(basePoint(-half), joint), (tip, tipRadius), (basePoint(half), joint)]
-            return [(tl, c), (tr, c)] + tail + [(br, c), (bl, c)]
+            return [tl] + (snapLo ? [] : [tr]) + [pLo, apex, pHi] + (snapHi ? [] : [br]) + [bl]
         case .bottom:
-            tail = [(basePoint(half), joint), (tip, tipRadius), (basePoint(-half), joint)]
-            return [(tl, c), (tr, c), (br, c)] + tail + [(bl, c)]
+            return [tl, tr] + (snapHi ? [] : [br]) + [pHi, apex, pLo] + (snapLo ? [] : [bl])
         case .left:
-            tail = [(basePoint(half), joint), (tip, tipRadius), (basePoint(-half), joint)]
-            return [(tl, c), (tr, c), (br, c), (bl, c)] + tail
+            return (snapLo ? [] : [tl]) + [tr, br] + (snapHi ? [] : [bl]) + [pHi, apex, pLo]
         }
     }
 
