@@ -47,6 +47,8 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
     private var nextNumber = 1
     private var textField: NSTextField?
     private var editingText: ScreenshotAnnotation?
+    private var textEntryOrigin: CGPoint = .zero
+    private var textEntryFontSize: CGFloat = 32
     private var baseDisplayImage: NSImage
 
     var onSelectionChanged: ((ScreenshotAnnotation?) -> Void)?
@@ -600,31 +602,56 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
         editingText = annotation
         let field = NSTextField(string: annotation?.text ?? "")
         let editorFontSize = annotation?.fontSize ?? max(12, currentStrokeWidth * 4)
-        let fontSize = editorFontSize * zoom
-        field.font = .systemFont(ofSize: fontSize)
+        field.font = .systemFont(ofSize: editorFontSize * zoom)
         field.placeholderString = "Type here…"
         field.textColor = contrastingColor(for: annotation?.color ?? currentColor)
         field.backgroundColor = annotation?.color ?? currentColor
-        field.isBordered = true
-        field.isBezeled = true
+        field.drawsBackground = true
+        field.isBordered = false
+        field.isBezeled = false
         field.focusRingType = .none
+        field.wantsLayer = true
+        field.layer?.cornerRadius = ScreenshotCalloutGeometry.cornerRadius * zoom
+        field.layer?.masksToBounds = true
+        field.cell?.isScrollable = true
+        field.cell?.wraps = false
         field.delegate = self
         field.target = self
         field.action = #selector(commitText)
-        field.frame = CGRect(
-            x: (point.x + canvasOffset.x) * zoom,
-            y: (point.y - fontSize / zoom + canvasOffset.y) * zoom,
-            width: max(120, CGFloat(field.stringValue.count * 14 + 36)),
-            height: fontSize + 20
-        )
+        textEntryOrigin = point
+        textEntryFontSize = editorFontSize
         addSubview(field)
         textField = field
+        fitTextField()
         window?.makeFirstResponder(field)
         if annotation != nil { field.selectText(nil) }
     }
 
+    /// Shottr parity: the entry box grows with the typed text and matches the rendered callout box
+    /// (same font, 8-point padding, same origin) so committing does not jump.
+    private func fitTextField() {
+        guard let field = textField else { return }
+        let padding: CGFloat = 8 * zoom
+        let font = field.font ?? .systemFont(ofSize: textEntryFontSize * zoom)
+        let text = field.stringValue.isEmpty ? (field.placeholderString ?? "") : field.stringValue
+        let width = ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        field.frame = CGRect(
+            x: (textEntryOrigin.x + canvasOffset.x) * zoom,
+            y: (textEntryOrigin.y - textEntryFontSize + canvasOffset.y) * zoom,
+            width: width + padding * 2 + 4,
+            height: textEntryFontSize * zoom + padding * 2
+        )
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        fitTextField()
+    }
+
     @objc private func commitText() {
         guard let field = textField else { return }
+        // Clear first: removing the field ends editing, which would re-enter this method and
+        // commit the same text twice.
+        textField = nil
         let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if let editingText {
             if value.isEmpty {
@@ -636,21 +663,19 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
                 select(editingText)
             }
         } else if !value.isEmpty {
-            let point = imagePoint(from: field.frame.origin)
             let annotation = ScreenshotAnnotation(
                 tool: .text,
-                start: CGPoint(x: point.x, y: point.y + currentStrokeWidth * 4),
-                end: point,
+                start: textEntryOrigin,
+                end: textEntryOrigin,
                 color: currentColor,
                 strokeWidth: currentStrokeWidth,
                 text: value,
-                fontSize: max(12, currentStrokeWidth * 4)
+                fontSize: textEntryFontSize
             )
             annotations.append(annotation)
             select(annotation)
         }
         field.removeFromSuperview()
-        textField = nil
         self.editingText = nil
         window?.makeFirstResponder(self)
         onDocumentChanged?()

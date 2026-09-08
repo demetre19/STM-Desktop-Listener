@@ -57,11 +57,22 @@ struct ScreenshotEditorRendererTests {
         )
         canvas.selectTool(.text)
         canvas.mouseDown(with: mouseEvent(.leftMouseDown, at: CGPoint(x: 160, y: 120), windowNumber: canvasWindow.windowNumber))
-        expect(
-            canvas.subviews.contains { $0 is NSTextField },
-            "text tool starts a new text entry inside an existing annotation"
-        )
-        canvas.cancelOperation(nil)
+        guard let entry = canvas.subviews.first(where: { $0 is NSTextField }) as? NSTextField else {
+            fail("text tool starts a new text entry inside an existing annotation")
+        }
+        // Shottr parity: the entry box grows as text is typed and the committed callout matches it.
+        let emptyWidth = entry.frame.width
+        entry.stringValue = "Growing callout text"
+        canvas.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: entry))
+        expect(entry.frame.width > emptyWidth + 60, "text entry expands while typing (\(emptyWidth) -> \(entry.frame.width))")
+        entry.sendAction(entry.action, to: entry.target)
+        guard let typed = canvas.annotations.first(where: { $0.tool == .text }) else {
+            fail("committing the entry creates a text callout")
+        }
+        let typedBounds = ScreenshotEditorRenderer.selectionBounds(typed)
+        expect(abs(typedBounds.width - entry.frame.width) <= 6 && abs(typedBounds.height - entry.frame.height) <= 2, "committed callout box matches the entry box size (\(typedBounds.size) vs \(entry.frame.size))")
+        expect(canvas.selectedAnnotation === typed, "committed callout stays selected so the nub is pullable")
+        canvas.annotations.removeAll { $0 === typed }
 
 
         let annotations = [
@@ -212,7 +223,7 @@ struct ScreenshotEditorRendererTests {
 
         runCalloutChecks()
 
-        print("ScreenshotEditorRendererTests: all 27 checks passed")
+        print("ScreenshotEditorRendererTests: all 31 checks passed")
     }
 
     /// Shottr-parity text callout: flat by default, flush nub, blob tail that follows the tip, hit-testable, never exported.
