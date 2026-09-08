@@ -153,6 +153,22 @@ final class STMPopoverViewController: NSViewController {
         row.addArrangedSubview(texts)
         container.addSubview(row)
         pin(row, to: container, inset: 20)
+
+        // One-level quit: small red door icon in the hero's top-right corner, same action as Tools > Quit.
+        let exit = STMActionButton(title: "Exit", target: self, action: #selector(quitApp))
+        exit.symbolName = "door.right.hand.open"
+        exit.toolTip = "Quit STM Desktop Listener"
+        exit.accentColor = red
+        exit.destructive = true
+        exit.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(exit)
+        NSLayoutConstraint.activate([
+            exit.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
+            exit.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            exit.widthAnchor.constraint(equalToConstant: 30),
+            exit.heightAnchor.constraint(equalToConstant: 30),
+            texts.trailingAnchor.constraint(lessThanOrEqualTo: exit.leadingAnchor, constant: -12)
+        ])
         return container
     }
 
@@ -804,6 +820,8 @@ final class STMActionButton: NSControl {
     var accentColor: NSColor? { didSet { needsDisplay = true } }
     var quiet = false { didSet { needsDisplay = true } }
     var destructive = false { didSet { needsDisplay = true } }
+    /// When set, a centered SF Symbol is drawn instead of the title (title stays as accessibility text).
+    var symbolName: String? { didSet { needsDisplay = true } }
     var state: NSControl.StateValue = .off { didSet { needsDisplay = true } }
     private var pressed = false { didSet { needsDisplay = true } }
     private var hovered = false { didSet { needsDisplay = true } }
@@ -896,18 +914,39 @@ final class STMActionButton: NSControl {
         path.lineWidth = accentColor == nil ? 1 : (destructive ? 1.15 : 1.25)
         path.stroke()
 
-        let textColor: NSColor = isEnabled ? .white : NSColor(calibratedWhite: 0.50, alpha: 1)
+        let contentColor: NSColor = isEnabled ? (accentColor ?? .white) : NSColor(calibratedWhite: 0.50, alpha: 1)
+        if let symbolName, let image = symbolImage(named: symbolName, color: contentColor) {
+            let size = image.size
+            let imageRect = NSRect(
+                x: (bounds.width - size.width) / 2,
+                y: (bounds.height - size.height) / 2 - (pressed ? 1 : 0),
+                width: size.width,
+                height: size.height
+            )
+            image.draw(in: imageRect)
+            return
+        }
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font ?? .systemFont(ofSize: 12, weight: .semibold),
-            .foregroundColor: textColor,
+            .foregroundColor: isEnabled ? .white : NSColor(calibratedWhite: 0.50, alpha: 1),
             .paragraphStyle: paragraph
         ]
         let attributed = NSAttributedString(string: title, attributes: attributes)
         let textSize = attributed.size()
         let textRect = NSRect(x: 0, y: (bounds.height - textSize.height) / 2 - (pressed ? 2 : 1), width: bounds.width, height: textSize.height)
         attributed.draw(in: textRect)
+    }
+
+    private func symbolImage(named name: String, color: NSColor) -> NSImage? {
+        for candidate in [name, "rectangle.portrait.and.arrow.right"] {
+            guard let base = NSImage(systemSymbolName: candidate, accessibilityDescription: title) else { continue }
+            let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+            return base.withSymbolConfiguration(config)
+        }
+        return nil
     }
 }
 
