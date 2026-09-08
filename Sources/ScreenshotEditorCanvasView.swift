@@ -318,8 +318,16 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
                     onDocumentChanged?()
                 }
             }
+        case .textTail(let annotation):
+            if let tailPoint = annotation.tailPoint {
+                annotation.tailPoint = ScreenshotCalloutGeometry.normalizedTip(
+                    rect: ScreenshotEditorRenderer.selectionBounds(annotation),
+                    tip: tailPoint
+                )
+            }
+            onDocumentChanged?()
         case .moving, .resizing, .lineAnchor, .magnifierSource, .magnifierDisplay,
-             .magnifierSourceResize, .magnifierDisplayResize, .textTail:
+             .magnifierSourceResize, .magnifierDisplayResize:
             onDocumentChanged?()
         case .backdropImage:
             onBackdropChanged?()
@@ -498,6 +506,10 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
 
     private func annotation(at point: CGPoint) -> ScreenshotAnnotation? {
         for annotation in annotations.reversed() {
+            if annotation.tool == .text,
+               ScreenshotEditorRenderer.textCalloutPath(annotation).contains(point) {
+                return annotation
+            }
             let bounds = ScreenshotEditorRenderer.selectionBounds(annotation).insetBy(dx: -10, dy: -10)
             if bounds.contains(point) { return annotation }
         }

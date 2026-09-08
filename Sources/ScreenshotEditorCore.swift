@@ -295,6 +295,90 @@ final class ScreenshotAnnotation {
     }
 }
 
+/// Shottr-parity callout tail geometry for text annotations. Pure functions; image coordinates with y down.
+enum ScreenshotCalloutGeometry {
+    static let cornerRadius: CGFloat = 8
+    /// Tips this close to the box (or inside it) collapse back to a flat box.
+    static let flatThreshold: CGFloat = 4
+
+    enum Side { case top, bottom, left, right }
+
+    /// Returns nil when the tip is inside or hugging the box, meaning the callout renders flat.
+    static func normalizedTip(rect: CGRect, tip: CGPoint) -> CGPoint? {
+        rect.insetBy(dx: -flatThreshold, dy: -flatThreshold).contains(tip) ? nil : tip
+    }
+
+    /// Where the pull handle sits: flush on the bottom edge when flat, at the tip when tailed.
+    static func nubPosition(rect: CGRect, tip: CGPoint?) -> CGPoint {
+        if let tip, let tip = normalizedTip(rect: rect, tip: tip) { return tip }
+        return CGPoint(x: rect.midX, y: rect.maxY)
+    }
+
+    /// Side of the box facing the tip, comparing the tip offset normalized by the box half-extents so
+    /// wide boxes attach on top/bottom unless the tip is clearly beside them.
+    static func attachedSide(rect: CGRect, tip: CGPoint) -> Side {
+        let nx = (tip.x - rect.midX) / max(rect.width / 2, 1)
+        let ny = (tip.y - rect.midY) / max(rect.height / 2, 1)
+        if abs(nx) > abs(ny) {
+            return nx > 0 ? .right : .left
+        }
+        return ny > 0 ? .bottom : .top
+    }
+
+    /// Filled blob tail: wide curved base that flares out of the box, concave sides tapering to the tip.
+    /// Nil when the callout is flat. The base is extended slightly into the box so the union with the
+    /// rounded rect has no anti-aliasing seam.
+    static func tailPath(rect: CGRect, tip rawTip: CGPoint) -> CGPath? {
+        guard let tip = normalizedTip(rect: rect, tip: rawTip) else { return nil }
+        let side = attachedSide(rect: rect, tip: tip)
+        let normal: CGPoint
+        let tangent: CGPoint
+        let edgeLength: CGFloat
+        var baseCenter: CGPoint
+        switch side {
+        case .top:
+            normal = CGPoint(x: 0, y: -1); tangent = CGPoint(x: 1, y: 0); edgeLength = rect.width
+            baseCenter = CGPoint(x: tip.x, y: rect.minY)
+        case .bottom:
+            normal = CGPoint(x: 0, y: 1); tangent = CGPoint(x: 1, y: 0); edgeLength = rect.width
+            baseCenter = CGPoint(x: tip.x, y: rect.maxY)
+        case .left:
+            normal = CGPoint(x: -1, y: 0); tangent = CGPoint(x: 0, y: 1); edgeLength = rect.height
+            baseCenter = CGPoint(x: rect.minX, y: tip.y)
+        case .right:
+            normal = CGPoint(x: 1, y: 0); tangent = CGPoint(x: 0, y: 1); edgeLength = rect.height
+            baseCenter = CGPoint(x: rect.maxX, y: tip.y)
+        }
+        let tailLength = hypot(tip.x - baseCenter.x, tip.y - baseCenter.y)
+        let baseWidth = max(18, min(0.6 * edgeLength, 30 + 0.22 * tailLength))
+
+        // Slide the base along the edge toward the tip, keeping clear of the rounded corners.
+        let edgeMin = (side == .top || side == .bottom ? rect.minX : rect.minY) + cornerRadius + baseWidth / 2
+        let edgeMax = (side == .top || side == .bottom ? rect.maxX : rect.maxY) - cornerRadius - baseWidth / 2
+        let along = min(max(side == .top || side == .bottom ? baseCenter.x : baseCenter.y, edgeMin), max(edgeMin, edgeMax))
+        if side == .top || side == .bottom { baseCenter.x = along } else { baseCenter.y = along }
+
+        let inset: CGFloat = 3
+        let half = baseWidth / 2
+        let b1 = CGPoint(x: baseCenter.x - tangent.x * half - normal.x * inset, y: baseCenter.y - tangent.y * half - normal.y * inset)
+        let b2 = CGPoint(x: baseCenter.x + tangent.x * half - normal.x * inset, y: baseCenter.y + tangent.y * half - normal.y * inset)
+
+        // Concave sides: pull each control point toward the tail centerline.
+        func control(from base: CGPoint) -> CGPoint {
+            let onSide = CGPoint(x: base.x + (tip.x - base.x) * 0.3, y: base.y + (tip.y - base.y) * 0.3)
+            let onCenter = CGPoint(x: baseCenter.x + (tip.x - baseCenter.x) * 0.3, y: baseCenter.y + (tip.y - baseCenter.y) * 0.3)
+            return CGPoint(x: onSide.x + (onCenter.x - onSide.x) * 0.75, y: onSide.y + (onCenter.y - onSide.y) * 0.75)
+        }
+
+        let path = CGMutablePath()
+        path.move(to: b1)
+        path.addQuadCurve(to: tip, control: control(from: b1))
+        path.addQuadCurve(to: b2, control: control(from: b2))
+        path.closeSubpath()
+        return path
+    }
+}
+
 extension NSColor {
     convenience init?(stmHex: String) {
         let cleaned = stmHex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)

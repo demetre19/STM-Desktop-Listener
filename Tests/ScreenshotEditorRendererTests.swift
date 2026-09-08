@@ -210,7 +210,89 @@ struct ScreenshotEditorRendererTests {
         }
         expect(cropped.width == 101 && cropped.height == 79, "crop preserves the selected pixel dimensions")
 
-        print("ScreenshotEditorRendererTests: all 14 checks passed")
+        runCalloutChecks()
+
+        print("ScreenshotEditorRendererTests: all 24 checks passed")
+    }
+
+    /// Shottr-parity text callout: flat by default, flush nub, blob tail that follows the tip, hit-testable, never exported.
+    private static func runCalloutChecks() {
+        guard let white = makeSolidImage(width: 320, height: 240, color: .white) else {
+            fail("could not create callout base image")
+        }
+        let red = NSColor(stmHex: "#DC2626")!
+        let callout = ScreenshotAnnotation(tool: .text, start: CGPoint(x: 100, y: 120), end: CGPoint(x: 100, y: 120), color: red, strokeWidth: 6, text: "Callout", fontSize: 24)
+        let rect = ScreenshotEditorRenderer.selectionBounds(callout)
+
+        let nub = ScreenshotEditorRenderer.textTailHandlePosition(callout)
+        expect(abs(nub.x - rect.midX) < 0.5 && abs(nub.y - rect.maxY) < 0.5, "flat callout nub sits flush on the bottom edge midpoint")
+
+        guard let flat = ScreenshotEditorRenderer.render(baseImage: white, annotations: [callout], backdrop: ScreenshotBackdropSettings()) else {
+            fail("could not render flat callout")
+        }
+        let outsideBelow = CGRect(x: rect.minX, y: rect.maxY + 3, width: rect.width, height: 60)
+        expect(redPixelCount(flat, within: outsideBelow) == 0, "callout renders flat while the nub has not been pulled")
+
+        // Tips hugging the box normalize back to flat; a real pull keeps the tip.
+        expect(ScreenshotCalloutGeometry.normalizedTip(rect: rect, tip: CGPoint(x: rect.midX, y: rect.maxY + 2)) == nil, "tip within the flat threshold collapses to a flat box")
+        expect(ScreenshotCalloutGeometry.normalizedTip(rect: rect, tip: CGPoint(x: rect.midX, y: rect.maxY + 40)) != nil, "pulled tip is retained")
+
+        // Tail on each side: red outside on the attached side, none on the opposite side.
+        let sides: [(String, CGPoint, CGRect, CGRect)] = [
+            ("bottom", CGPoint(x: rect.midX + 20, y: rect.maxY + 50), CGRect(x: rect.minX, y: rect.maxY + 3, width: rect.width, height: 40), CGRect(x: rect.minX, y: rect.minY - 43, width: rect.width, height: 40)),
+            ("top", CGPoint(x: rect.midX - 20, y: rect.minY - 50), CGRect(x: rect.minX, y: rect.minY - 43, width: rect.width, height: 40), CGRect(x: rect.minX, y: rect.maxY + 3, width: rect.width, height: 40)),
+            ("right", CGPoint(x: rect.maxX + 70, y: rect.midY + 5), CGRect(x: rect.maxX + 3, y: rect.minY, width: 40, height: rect.height), CGRect(x: rect.minX - 43, y: rect.minY, width: 40, height: rect.height)),
+            ("left", CGPoint(x: rect.minX - 70, y: rect.midY - 5), CGRect(x: rect.minX - 43, y: rect.minY, width: 40, height: rect.height), CGRect(x: rect.maxX + 3, y: rect.minY, width: 40, height: rect.height))
+        ]
+        for (name, tip, attached, opposite) in sides {
+            callout.tailPoint = tip
+            guard let image = ScreenshotEditorRenderer.render(baseImage: white, annotations: [callout], backdrop: ScreenshotBackdropSettings()) else {
+                fail("could not render \(name) callout tail")
+            }
+            expect(redPixelCount(image, within: attached) > 50 && redPixelCount(image, within: opposite) == 0, "tail attaches on the \(name) side facing the tip")
+        }
+
+        // Blob shape: base flares wider than the straight triangle would and the tail tapers monotonically to the tip.
+        let tip = CGPoint(x: rect.midX, y: rect.maxY + 60)
+        callout.tailPoint = tip
+        guard let tailed = ScreenshotEditorRenderer.render(baseImage: white, annotations: [callout], backdrop: ScreenshotBackdropSettings()) else {
+            fail("could not render tapering callout")
+        }
+        var widths: [Int] = []
+        for y in stride(from: Int(rect.maxY) + 2, to: Int(tip.y) - 2, by: 6) {
+            widths.append(redPixelCount(tailed, within: CGRect(x: 0, y: CGFloat(y), width: 320, height: 1)))
+        }
+        expect(widths.first! >= 14, "tail base is at least the minimum blob width, got \(widths.first!)")
+        expect(zip(widths, widths.dropFirst()).allSatisfy { $0 >= $1 } && widths.last! < widths.first!, "tail tapers monotonically from base to tip: \(widths)")
+        let straightBaseHalf = min(rect.width * 0.3, 20) / 2
+        let baseRow = redPixelCount(tailed, within: CGRect(x: 0, y: rect.maxY + 2, width: 320, height: 1))
+        expect(CGFloat(baseRow) > straightBaseHalf * 2, "flared base is wider than the legacy straight triangle base")
+
+        // Nub is selection chrome only.
+        guard let selected = ScreenshotEditorRenderer.render(baseImage: white, annotations: [callout], backdrop: ScreenshotBackdropSettings(), includeSelection: callout.id) else {
+            fail("could not render selected callout")
+        }
+        let nubRect = CGRect(x: tip.x - 8, y: tip.y - 8, width: 16, height: 16)
+        expect(whitePixelBounds(selected, within: nubRect.insetBy(dx: 1, dy: 1)) != nil, "selected callout shows the white-ringed nub at the tip")
+        expect(redPixelCount(selected, within: nubRect) > redPixelCount(tailed, within: nubRect) + 40, "nub disc is drawn only with selection; export keeps the bare tapered tip")
+
+        // Canvas: clicking the tail selects the callout, and releasing the tip inside the box flattens it.
+        let canvas = ScreenshotEditorCanvasView(image: white)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 240), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = canvas
+        canvas.annotations = [callout]
+        canvas.selectTool(.arrow)
+        // Window coordinates are y-up; the flipped canvas maps image y to 240 - y.
+        func windowPoint(_ image: CGPoint) -> CGPoint { CGPoint(x: image.x, y: 240 - image.y) }
+        let tailMid = windowPoint(CGPoint(x: rect.midX, y: rect.maxY + 25))
+        canvas.mouseDown(with: mouseEvent(.leftMouseDown, at: tailMid, windowNumber: window.windowNumber))
+        canvas.mouseUp(with: mouseEvent(.leftMouseUp, at: tailMid, windowNumber: window.windowNumber))
+        expect(canvas.selectedAnnotation === callout, "clicking the tail selects the callout instead of starting a new annotation")
+        let inside = windowPoint(CGPoint(x: rect.midX, y: rect.midY))
+        canvas.mouseDown(with: mouseEvent(.leftMouseDown, at: windowPoint(tip), windowNumber: window.windowNumber))
+        canvas.mouseDragged(with: mouseEvent(.leftMouseDragged, at: inside, windowNumber: window.windowNumber))
+        canvas.mouseUp(with: mouseEvent(.leftMouseUp, at: inside, windowNumber: window.windowNumber))
+        expect(callout.tailPoint == nil, "dragging the tip back into the box returns the callout to flat")
     }
 
     private static func annotation(_ tool: ScreenshotTool, from start: CGPoint, to end: CGPoint, color: NSColor) -> ScreenshotAnnotation {
@@ -315,6 +397,26 @@ struct ScreenshotEditorRendererTests {
             for index in stride(from: 0, to: rgba.count, by: 4) {
                 if rgba[index] > 160 && rgba[index + 1] < 100 && rgba[index + 2] < 100 {
                     count += 1
+                }
+            }
+            return count
+        }
+    }
+
+    private static func redPixelCount(_ image: CGImage, within rect: CGRect) -> Int {
+        let bytes = pixelData(image)
+        let minX = max(0, Int(rect.minX))
+        let maxX = min(image.width - 1, Int(rect.maxX))
+        let minY = max(0, Int(rect.minY))
+        let maxY = min(image.height - 1, Int(rect.maxY))
+        guard minX <= maxX, minY <= maxY else { return 0 }
+        return bytes.withUnsafeBytes { raw -> Int in
+            let rgba = raw.bindMemory(to: UInt8.self)
+            var count = 0
+            for y in minY...maxY {
+                for x in minX...maxX {
+                    let index = (y * image.width + x) * 4
+                    if rgba[index] > 160 && rgba[index + 1] < 100 && rgba[index + 2] < 100 { count += 1 }
                 }
             }
             return count

@@ -279,39 +279,19 @@ enum ScreenshotEditorRenderer {
         let attributed = NSAttributedString(string: annotation.text, attributes: attributes)
         let line = CTLineCreateWithAttributedString(attributed)
         let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-        let padding: CGFloat = 8
-        let rect = CGRect(
-            x: annotation.start.x,
-            y: annotation.start.y - annotation.fontSize,
-            width: width + padding * 2,
-            height: annotation.fontSize + padding * 2
-        )
-        if let tail = annotation.tailPoint {
-            let center = CGPoint(x: rect.midX, y: rect.midY)
-            let dx = tail.x - center.x
-            let dy = tail.y - center.y
-            let baseWidth = min(rect.width * 0.3, 20)
-            let first: CGPoint
-            let second: CGPoint
-            if abs(dx) > abs(dy) {
-                let x = dx > 0 ? rect.maxX : rect.minX
-                first = CGPoint(x: x, y: center.y - baseWidth / 2)
-                second = CGPoint(x: x, y: center.y + baseWidth / 2)
-            } else {
-                let y = dy > 0 ? rect.maxY : rect.minY
-                first = CGPoint(x: center.x - baseWidth / 2, y: y)
-                second = CGPoint(x: center.x + baseWidth / 2, y: y)
-            }
-            context.setFillColor(annotation.color.cgColor)
-            context.move(to: first)
-            context.addLine(to: tail)
-            context.addLine(to: second)
-            context.closePath()
-            context.fillPath()
-        }
+        let rect = selectionBounds(annotation)
 
+        // Box and tail are one fill so the blob flows out of the rounded rect without a seam.
+        let shape = CGMutablePath()
+        shape.addPath(CGPath(roundedRect: rect, cornerWidth: ScreenshotCalloutGeometry.cornerRadius, cornerHeight: ScreenshotCalloutGeometry.cornerRadius, transform: nil))
+        if let tailPoint = annotation.tailPoint,
+           let tail = ScreenshotCalloutGeometry.tailPath(rect: rect, tip: tailPoint) {
+            shape.addPath(tail)
+        }
         context.setFillColor(annotation.color.cgColor)
-        context.fill(roundedRect: rect, radius: 8)
+        context.addPath(shape)
+        context.fillPath(using: .winding)
+
         context.saveGState()
         context.translateBy(x: rect.midX - width / 2, y: rect.midY + annotation.fontSize * 0.36)
         context.scaleBy(x: 1, y: -1)
@@ -489,16 +469,14 @@ enum ScreenshotEditorRenderer {
             context.stroke(CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8))
         }
         if annotation.tool == .text {
+            // Shottr-style pull nub: flush on the box edge when flat, riding the tip when tailed.
             let handle = textTailHandlePosition(annotation)
-            context.setLineDash(phase: 0, lengths: [3, 3])
-            context.move(to: CGPoint(x: rect.midX, y: rect.minY))
-            context.addLine(to: handle)
-            context.strokePath()
-            context.setLineDash(phase: 0, lengths: [])
-            context.setFillColor((annotation.tailPoint == nil ? NSColor(stmHex: "#6B7280")! : cyan).cgColor)
-            context.fillEllipse(in: CGRect(x: handle.x - 10, y: handle.y - 10, width: 20, height: 20))
+            let nub = CGRect(x: handle.x - 7, y: handle.y - 7, width: 14, height: 14)
+            context.setFillColor(annotation.color.cgColor)
+            context.fillEllipse(in: nub)
             context.setStrokeColor(NSColor.white.cgColor)
-            context.strokeEllipse(in: CGRect(x: handle.x - 10, y: handle.y - 10, width: 20, height: 20))
+            context.setLineWidth(2)
+            context.strokeEllipse(in: nub)
         }
         context.restoreGState()
     }
@@ -525,11 +503,19 @@ enum ScreenshotEditorRenderer {
     }
 
     static func textTailHandlePosition(_ annotation: ScreenshotAnnotation) -> CGPoint {
-        if let tailPoint = annotation.tailPoint {
-            return tailPoint
+        ScreenshotCalloutGeometry.nubPosition(rect: selectionBounds(annotation), tip: annotation.tailPoint)
+    }
+
+    /// Filled callout outline (box plus tail) used for hit-testing text annotations.
+    static func textCalloutPath(_ annotation: ScreenshotAnnotation) -> CGPath {
+        let rect = selectionBounds(annotation)
+        let path = CGMutablePath()
+        path.addRect(rect)
+        if let tailPoint = annotation.tailPoint,
+           let tail = ScreenshotCalloutGeometry.tailPath(rect: rect, tip: tailPoint) {
+            path.addPath(tail)
         }
-        let bounds = selectionBounds(annotation)
-        return CGPoint(x: bounds.midX, y: bounds.minY - 25)
+        return path
     }
 
     private static func drawCropOverlay(_ rect: CGRect, in context: CGContext, canvasSize: CGSize) {
