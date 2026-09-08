@@ -281,16 +281,10 @@ enum ScreenshotEditorRenderer {
         let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
         let rect = selectionBounds(annotation)
 
-        // Box and tail are one fill so the blob flows out of the rounded rect without a seam.
-        let shape = CGMutablePath()
-        shape.addPath(CGPath(roundedRect: rect, cornerWidth: ScreenshotCalloutGeometry.cornerRadius, cornerHeight: ScreenshotCalloutGeometry.cornerRadius, transform: nil))
-        if let tailPoint = annotation.tailPoint,
-           let tail = ScreenshotCalloutGeometry.tailPath(rect: rect, tip: tailPoint) {
-            shape.addPath(tail)
-        }
+        // Box and tail are one filleted outline so the tail blends into the rounded rect (Shottr look).
         context.setFillColor(annotation.color.cgColor)
-        context.addPath(shape)
-        context.fillPath(using: .winding)
+        context.addPath(ScreenshotCalloutGeometry.shapePath(rect: rect, tip: annotation.tailPoint))
+        context.fillPath()
 
         context.saveGState()
         context.translateBy(x: rect.midX - width / 2, y: rect.midY + annotation.fontSize * 0.36)
@@ -508,14 +502,7 @@ enum ScreenshotEditorRenderer {
 
     /// Filled callout outline (box plus tail) used for hit-testing text annotations.
     static func textCalloutPath(_ annotation: ScreenshotAnnotation) -> CGPath {
-        let rect = selectionBounds(annotation)
-        let path = CGMutablePath()
-        path.addRect(rect)
-        if let tailPoint = annotation.tailPoint,
-           let tail = ScreenshotCalloutGeometry.tailPath(rect: rect, tip: tailPoint) {
-            path.addPath(tail)
-        }
-        return path
+        ScreenshotCalloutGeometry.shapePath(rect: selectionBounds(annotation), tip: annotation.tailPoint)
     }
 
     private static func drawCropOverlay(_ rect: CGRect, in context: CGContext, canvasSize: CGSize) {

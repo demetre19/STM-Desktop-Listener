@@ -325,57 +325,81 @@ enum ScreenshotCalloutGeometry {
         return ny > 0 ? .bottom : .top
     }
 
-    /// Filled blob tail: wide curved base that flares out of the box, concave sides tapering to the tip.
-    /// Nil when the callout is flat. The base is extended slightly into the box so the union with the
-    /// rounded rect has no anti-aliasing seam.
-    static func tailPath(rect: CGRect, tip rawTip: CGPoint) -> CGPath? {
+    /// Radius of the fillet where the tail meets the box (the concave "reverse curve") and of the tip.
+    static let jointRadius: CGFloat = 10
+    static let tipRadius: CGFloat = 3
+
+    /// Ordered outline vertices of the callout (box corners plus tail base points and tip) with the
+    /// fillet radius for each vertex. Nil when flat. Clockwise in image space (y down).
+    static func outline(rect: CGRect, tip rawTip: CGPoint) -> [(point: CGPoint, radius: CGFloat)]? {
         guard let tip = normalizedTip(rect: rect, tip: rawTip) else { return nil }
         let side = attachedSide(rect: rect, tip: tip)
-        let normal: CGPoint
-        let tangent: CGPoint
-        let edgeLength: CGFloat
-        var baseCenter: CGPoint
+        let horizontal = side == .top || side == .bottom
+        let edgeLength = horizontal ? rect.width : rect.height
+        let edgeCoord = side == .top ? rect.minY : side == .bottom ? rect.maxY : side == .left ? rect.minX : rect.maxX
+        var along = horizontal ? tip.x : tip.y
+        let tailLength = horizontal ? abs(tip.y - edgeCoord) : abs(tip.x - edgeCoord)
+        let baseWidth = max(18, min(0.6 * edgeLength, 30 + 0.22 * tailLength))
+        let edgeMin = (horizontal ? rect.minX : rect.minY) + cornerRadius + jointRadius + baseWidth / 2
+        let edgeMax = (horizontal ? rect.maxX : rect.maxY) - cornerRadius - jointRadius - baseWidth / 2
+        along = min(max(along, edgeMin), max(edgeMin, edgeMax))
+        let half = baseWidth / 2
+        // Base points ordered so they appear in clockwise traversal along the attached edge.
+        func basePoint(_ offset: CGFloat) -> CGPoint {
+            horizontal ? CGPoint(x: along + offset, y: edgeCoord) : CGPoint(x: edgeCoord, y: along + offset)
+        }
+        let joint: CGFloat = min(jointRadius, half * 0.9)
+
+        let tl = CGPoint(x: rect.minX, y: rect.minY), tr = CGPoint(x: rect.maxX, y: rect.minY)
+        let br = CGPoint(x: rect.maxX, y: rect.maxY), bl = CGPoint(x: rect.minX, y: rect.maxY)
+        let c = cornerRadius
+        let tail: [(CGPoint, CGFloat)]
         switch side {
         case .top:
-            normal = CGPoint(x: 0, y: -1); tangent = CGPoint(x: 1, y: 0); edgeLength = rect.width
-            baseCenter = CGPoint(x: tip.x, y: rect.minY)
-        case .bottom:
-            normal = CGPoint(x: 0, y: 1); tangent = CGPoint(x: 1, y: 0); edgeLength = rect.width
-            baseCenter = CGPoint(x: tip.x, y: rect.maxY)
-        case .left:
-            normal = CGPoint(x: -1, y: 0); tangent = CGPoint(x: 0, y: 1); edgeLength = rect.height
-            baseCenter = CGPoint(x: rect.minX, y: tip.y)
+            tail = [(basePoint(-half), joint), (tip, tipRadius), (basePoint(half), joint)]
+            return [(tl, c)] + tail + [(tr, c), (br, c), (bl, c)]
         case .right:
-            normal = CGPoint(x: 1, y: 0); tangent = CGPoint(x: 0, y: 1); edgeLength = rect.height
-            baseCenter = CGPoint(x: rect.maxX, y: tip.y)
+            tail = [(basePoint(-half), joint), (tip, tipRadius), (basePoint(half), joint)]
+            return [(tl, c), (tr, c)] + tail + [(br, c), (bl, c)]
+        case .bottom:
+            tail = [(basePoint(half), joint), (tip, tipRadius), (basePoint(-half), joint)]
+            return [(tl, c), (tr, c), (br, c)] + tail + [(bl, c)]
+        case .left:
+            tail = [(basePoint(half), joint), (tip, tipRadius), (basePoint(-half), joint)]
+            return [(tl, c), (tr, c), (br, c), (bl, c)] + tail
         }
-        let tailLength = hypot(tip.x - baseCenter.x, tip.y - baseCenter.y)
-        let baseWidth = max(18, min(0.6 * edgeLength, 30 + 0.22 * tailLength))
+    }
 
-        // Slide the base along the edge toward the tip, keeping clear of the rounded corners.
-        let edgeMin = (side == .top || side == .bottom ? rect.minX : rect.minY) + cornerRadius + baseWidth / 2
-        let edgeMax = (side == .top || side == .bottom ? rect.maxX : rect.maxY) - cornerRadius - baseWidth / 2
-        let along = min(max(side == .top || side == .bottom ? baseCenter.x : baseCenter.y, edgeMin), max(edgeMin, edgeMax))
-        if side == .top || side == .bottom { baseCenter.x = along } else { baseCenter.y = along }
-
-        let inset: CGFloat = 3
-        let half = baseWidth / 2
-        let b1 = CGPoint(x: baseCenter.x - tangent.x * half - normal.x * inset, y: baseCenter.y - tangent.y * half - normal.y * inset)
-        let b2 = CGPoint(x: baseCenter.x + tangent.x * half - normal.x * inset, y: baseCenter.y + tangent.y * half - normal.y * inset)
-
-        // Concave sides: pull each control point toward the tail centerline.
-        func control(from base: CGPoint) -> CGPoint {
-            let onSide = CGPoint(x: base.x + (tip.x - base.x) * 0.3, y: base.y + (tip.y - base.y) * 0.3)
-            let onCenter = CGPoint(x: baseCenter.x + (tip.x - baseCenter.x) * 0.3, y: baseCenter.y + (tip.y - baseCenter.y) * 0.3)
-            return CGPoint(x: onSide.x + (onCenter.x - onSide.x) * 0.75, y: onSide.y + (onCenter.y - onSide.y) * 0.75)
+    /// Full callout shape: box plus tail as one polygon with every vertex filleted by a tangent arc.
+    /// Convex corners round outward; the reflex vertices where the tail leaves the box round inward,
+    /// which gives the smooth Shottr-style blend into the box. Falls back to the plain rounded rect when flat.
+    static func shapePath(rect: CGRect, tip: CGPoint?) -> CGPath {
+        guard let tip, let vertices = outline(rect: rect, tip: tip) else {
+            return CGPath(roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
         }
-
         let path = CGMutablePath()
-        path.move(to: b1)
-        path.addQuadCurve(to: tip, control: control(from: b1))
-        path.addQuadCurve(to: b2, control: control(from: b2))
+        let count = vertices.count
+        for index in 0..<count {
+            let previous = vertices[(index + count - 1) % count].point
+            let current = vertices[index].point
+            let next = vertices[(index + 1) % count].point
+            let inLength = hypot(current.x - previous.x, current.y - previous.y)
+            let outLength = hypot(next.x - current.x, next.y - current.y)
+            // A fillet may not consume more than half of either adjacent segment.
+            let radius = min(vertices[index].radius, inLength / 2, outLength / 2)
+            let entry = CGPoint(x: current.x + (previous.x - current.x) * radius / max(inLength, 0.001),
+                                y: current.y + (previous.y - current.y) * radius / max(inLength, 0.001))
+            if index == 0 { path.move(to: entry) } else { path.addLine(to: entry) }
+            path.addArc(tangent1End: current, tangent2End: next, radius: radius)
+        }
         path.closeSubpath()
         return path
+    }
+
+    /// Tail-only region (for hit-testing and tests): the shape minus the box rect.
+    static func tailPath(rect: CGRect, tip: CGPoint) -> CGPath? {
+        guard normalizedTip(rect: rect, tip: tip) != nil else { return nil }
+        return shapePath(rect: rect, tip: tip)
     }
 }
 
