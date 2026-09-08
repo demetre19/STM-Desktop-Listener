@@ -80,7 +80,7 @@ final class STMPopoverViewController: NSViewController {
         rootStack.edgeInsets = NSEdgeInsets(top: 22, left: 20, bottom: 24, right: 20)
         rootStack.translatesAutoresizingMaskIntoConstraints = false
 
-        let document = NSView()
+        let document = STMFlippedView()
         document.translatesAutoresizingMaskIntoConstraints = false
         document.addSubview(rootStack)
         scrollView.documentView = document
@@ -104,6 +104,9 @@ final class STMPopoverViewController: NSViewController {
     override func viewWillAppear() {
         super.viewWillAppear()
         refresh()
+        // The popover must always open at the top (hero + tabs), never mid-scroll.
+        scrollView.contentView.scroll(to: .zero)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     func refresh() {
@@ -813,6 +816,11 @@ final class STMMenuBackdropView: NSView {
         NSColor(calibratedRed: 0.020, green: 0.024, blue: 0.027, alpha: 1).setFill()
         bounds.fill()
     }
+}
+
+/// Flipped so the scroll view's origin is the top of the document; otherwise the popover opens at the bottom.
+final class STMFlippedView: NSView {
+    override var isFlipped: Bool { true }
 }
 final class STMActionButton: NSControl {
     var title: String = "" { didSet { needsDisplay = true } }
