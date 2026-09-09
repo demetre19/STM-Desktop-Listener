@@ -208,9 +208,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var commandShortcutFields: [String: NSTextField] = [:]
     private var transcriptionEnginePopup: NSPopUpButton?
     private var voiceCommandsCheck: NSButton?
-    private var parakeetStatusLabel: NSTextField?
-    private var parakeetDownloadButton: STMActionButton?
-    private var parakeetReuseButton: STMActionButton?
+    private var qwenStatusLabel: NSTextField?
+    private var qwenDownloadButton: STMActionButton?
+    private var qwenProgressIndicator: NSProgressIndicator?
     private var sidebarButtons: [String: NSButton] = [:]
     private var recordingMonitor: Any?
     private var recordingFeature: FeatureID?
@@ -239,12 +239,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.center()
         super.init(window: window)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(qwenInstallationStateChanged(_:)),
+            name: .qwenInstallationStateChanged,
+            object: nil
+        )
         window.delegate = self
         window.contentView = buildContent()
     }
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self, name: .qwenInstallationStateChanged, object: nil)
     }
 
     override func showWindow(_ sender: Any?) {
@@ -425,29 +435,60 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         transcriptionEnginePopup = enginePopup
         stack.addArrangedSubview(polishFieldRow("Transcription", control: enginePopup))
 
-        let status = label(ParakeetModelManager.statusText(), font: .systemFont(ofSize: 12))
-        status.textColor = ParakeetModelManager.resolvedModelURL() == nil ? SettingsPalette.muted : .systemGreen
+        let status = label(QwenModelManager.statusText(), font: .systemFont(ofSize: 12))
+        status.textColor = QwenRuntimeManager.isInstalled && QwenModelManager.resolvedModelURL() != nil
+            ? .systemGreen
+            : SettingsPalette.muted
         status.widthAnchor.constraint(equalToConstant: 580).isActive = true
-        parakeetStatusLabel = status
-        stack.addArrangedSubview(polishFieldRow("Local model", control: status))
+        qwenStatusLabel = status
+        stack.addArrangedSubview(polishFieldRow("Local backup", control: status))
 
         let modelActions = horizontalStack(spacing: 10)
-        let downloadButton = button("Download Parakeet (~465 MB)", action: #selector(downloadParakeetModel))
-        parakeetDownloadButton = downloadButton
+        let downloadButton = button(
+            "Download and Install Qwen3-ASR (~1.3 GB)",
+            action: #selector(downloadQwenModel)
+        )
+        qwenDownloadButton = downloadButton
         modelActions.addArrangedSubview(downloadButton)
-        if ParakeetModelManager.isValidModel(at: ParakeetModelManager.orcaModelURL) {
-            let reuseButton = button("Use Orca Model", action: #selector(reuseOrcaParakeetModel))
-            parakeetReuseButton = reuseButton
-            modelActions.addArrangedSubview(reuseButton)
-        }
-        stack.addArrangedSubview(polishFieldRow("Model setup", control: modelActions))
+        stack.addArrangedSubview(polishFieldRow("Local setup", control: modelActions))
+
+        let installationState = QwenInstallationCoordinator.shared.state
+        let folderControls = horizontalStack(spacing: 10)
+        let folderPath = label(
+            FileManager.default.displayName(atPath: QwenModelManager.storageRootURL.path),
+            font: .systemFont(ofSize: 11)
+        )
+        folderPath.lineBreakMode = .byTruncatingMiddle
+        folderPath.toolTip = QwenModelManager.storageRootURL.path
+        folderPath.widthAnchor.constraint(equalToConstant: 360).isActive = true
+        folderControls.addArrangedSubview(folderPath)
+        let chooseFolderButton = button("Choose Model Folder…", action: #selector(chooseQwenModelFolder))
+        chooseFolderButton.isEnabled = !installationState.isRunning
+        folderControls.addArrangedSubview(chooseFolderButton)
+        stack.addArrangedSubview(polishFieldRow("Model folder", control: folderControls))
+
+        let progressIndicator = NSProgressIndicator()
+        progressIndicator.style = .bar
+        progressIndicator.isIndeterminate = false
+        progressIndicator.minValue = 0
+        progressIndicator.maxValue = 1
+        progressIndicator.doubleValue = installationState.fraction
+        progressIndicator.isHidden = !installationState.isRunning && installationState.fraction <= 0
+        progressIndicator.widthAnchor.constraint(equalToConstant: 580).isActive = true
+        progressIndicator.heightAnchor.constraint(equalToConstant: 8).isActive = true
+        qwenProgressIndicator = progressIndicator
+        stack.addArrangedSubview(polishFieldRow("Install progress", control: progressIndicator))
+        refreshQwenInstallationUI()
 
         let voiceCommands = NSButton(checkboxWithTitle: "Allow “command <saved shortcut name>” voice commands", target: nil, action: nil)
         voiceCommands.state = localConfig.voiceCommandsEnabled ? .on : .off
         voiceCommandsCheck = voiceCommands
         stack.addArrangedSubview(polishFieldRow("Voice commands", control: voiceCommands))
 
-        let attribution = label("Parakeet is downloaded only when requested and runs on-device. NVIDIA Parakeet TDT 0.6B v3 is CC-BY-4.0; STM uses Apache-2.0 sherpa-onnx.", font: .systemFont(ofSize: 11))
+        let attribution = label(
+            "Cloudflare remains preferred. Qwen3-ASR 0.6B downloads only when requested, runs locally through a private MLX runtime, and is Apache-2.0.",
+            font: .systemFont(ofSize: 11)
+        )
         attribution.textColor = SettingsPalette.muted
         attribution.widthAnchor.constraint(equalToConstant: 760).isActive = true
         stack.addArrangedSubview(attribution)
@@ -1147,8 +1188,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     @objc private func saveVoiceAISettings() {
         do {
             let transcriptionEngine = selectedTranscriptionEngine()
-            if transcriptionEngine == .parakeet && ParakeetModelManager.resolvedModelURL() == nil {
-                throw SimpleError("Download Parakeet or select Orca's existing model before enabling local transcription.")
+            if transcriptionEngine == .qwen &&
+                (!QwenRuntimeManager.isInstalled || QwenModelManager.resolvedModelURL() == nil) {
+                throw SimpleError("Download and install Qwen3-ASR before enabling local transcription.")
             }
             let existingLocalConfig = DictationLocalConfiguration.load()
             let localConfig = DictationLocalConfiguration(
@@ -1164,46 +1206,51 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             showError("Save failed", error.localizedDescription)
         }
     }
-    @objc private func reuseOrcaParakeetModel() {
+
+    @objc private func chooseQwenModelFolder() {
+        guard !QwenInstallationCoordinator.shared.state.isRunning else {
+            showError("Qwen3-ASR installation active", "Wait for the current installation to finish before changing its model folder.")
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.title = "Choose Qwen3-ASR Model Folder"
+        panel.prompt = "Use Folder"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = QwenModelManager.storageRootURL
+        guard panel.runModal() == .OK, let selectedURL = panel.url else { return }
         do {
-            _ = try ParakeetModelManager.selectOrcaModel()
-            try ConfigStore.set(DictationTranscriptionEngine.parakeet.rawValue, for: DictationLocalConfiguration.engineKey)
-            onSettingsChanged()
+            try QwenModelManager.setStorageRoot(selectedURL)
             rebuildContentView()
         } catch {
-            showError("Parakeet setup failed", error.localizedDescription)
+            showError("Model folder unavailable", error.localizedDescription)
         }
     }
 
-    @objc private func downloadParakeetModel() {
-        parakeetDownloadButton?.isEnabled = false
-        parakeetReuseButton?.isEnabled = false
-        parakeetStatusLabel?.stringValue = "Downloading and verifying Parakeet…"
-        Task { [weak self] in
-            do {
-                _ = try await Task.detached {
-                    try await ParakeetModelManager.download()
-                }.value
-                try ConfigStore.set(DictationTranscriptionEngine.parakeet.rawValue, for: DictationLocalConfiguration.engineKey)
-                await MainActor.run {
-                    guard let self = self else { return }
-                    self.onSettingsChanged()
-                    self.rebuildContentView()
-                }
-            } catch {
-                await MainActor.run {
-                    guard let self = self else { return }
-                    self.parakeetDownloadButton?.isEnabled = true
-                    self.parakeetReuseButton?.isEnabled = true
-                    self.parakeetStatusLabel?.stringValue = ParakeetModelManager.statusText()
-                    self.showError("Parakeet download failed", error.localizedDescription)
-                }
-            }
-        }
+    @objc private func downloadQwenModel() {
+        QwenInstallationCoordinator.shared.start()
+        refreshQwenInstallationUI()
     }
 
+    @objc private func qwenInstallationStateChanged(_ notification: Notification) {
+        refreshQwenInstallationUI()
+    }
 
-
+    private func refreshQwenInstallationUI() {
+        let state = QwenInstallationCoordinator.shared.state
+        let isReady = QwenRuntimeManager.isInstalled && QwenModelManager.resolvedModelURL() != nil
+        qwenProgressIndicator?.doubleValue = state.fraction
+        qwenProgressIndicator?.isHidden = !state.isRunning && state.fraction <= 0
+        qwenDownloadButton?.isEnabled = !state.isRunning && !isReady
+        qwenDownloadButton?.title = isReady ? "Qwen3-ASR Installed and Ready" : "Download and Install Qwen3-ASR (~1.3 GB)"
+        if state.isRunning || state.fraction > 0 {
+            qwenStatusLabel?.stringValue = state.errorMessage.map { "Installation failed: \($0)" } ?? state.message
+        } else {
+            qwenStatusLabel?.stringValue = QwenModelManager.statusText()
+        }
+    }
     @objc private func recordCommandShortcut(_ sender: NSControl) {
         guard let id = sender.identifier?.rawValue else { return }
         startRecordingCommandShortcut(id: id)

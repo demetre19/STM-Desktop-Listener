@@ -22,7 +22,7 @@ Turn screenshots, locked PDFs, videos, and image-only text into editable copy. O
 
 ### Speak at the speed of thought
 
-Dictate anywhere on your Mac with a primary and alternate shortcut. Choose fast cloud transcription or private local Parakeet, then keep working with clean punctuation and capitalization.
+Dictate anywhere on your Mac with a primary and alternate shortcut. Cloudflare is the default and preferred transcription engine; an optional local Qwen3-ASR backup keeps private or offline dictation available with clean punctuation and capitalization.
 
 ![Choose the right dictation model for the moment](Images/dictation.jpg)
 
@@ -102,7 +102,7 @@ You need:
 - Administrator permission only if your account cannot replace the app in `/Applications`.
 - Microphone, Screen Recording, and Accessibility permission when you use the features that need them.
 
-Cloudflare credentials are optional when you use local Parakeet transcription. Brave or Chrome plus the STM extension is needed only for scrolling-capture and image-optimiser bridge workflows.
+Cloudflare credentials are optional only when the downloaded local Qwen3-ASR backup is selected. Brave or Chrome plus the STM extension is needed only for scrolling-capture and image-optimiser bridge workflows.
 
 ## Precompiled downloads and release channels
 
@@ -208,19 +208,20 @@ Open **Settings > Voice AI** to choose cloud or local transcription and configur
 Every dictation uses the bundled local Edge-Punct-Casing model after speech recognition. STM accepts its punctuation and capitalization only when the case-insensitive sequence of every letter and number token is unchanged. A candidate that adds, removes, changes, or reorders words is rejected; existing acronyms and mixed-case names keep their original casing. The transcript is never sent to a general chat model.
 
 
-### Local Parakeet transcription
+### Local Qwen3-ASR backup
 
-- Choose **Local Parakeet** to keep speech recognition on the Mac; Worker credentials are not required.
-- **Use Orca Model** reuses Orca's existing `parakeet-tdt-0.6b-v3-int8` files without copying them.
-- **Download Parakeet** installs the same model into STM Desktop Listener's Application Support folder after verifying the published archive SHA-256.
-- Parakeet supplies punctuation and capitalization directly.
+- Cloudflare remains the default and preferred transcription engine. Choose **Qwen3-ASR 0.6B (local)** only when private or offline transcription is wanted; Worker credentials are not required for that engine.
+- **Download and Install Qwen3-ASR** installs the private MLX runtime and pinned 8-bit model, verifies the installer and every downloaded file by exact SHA-256, then loads the model and keeps one helper process warm while local transcription is selected.
+- **Choose Model Folder…** selects and persists the model storage parent directory. The default is STM Desktop Listener's Application Support `Models` folder.
+- Installation is application-scoped: leaving Voice AI settings or closing the window does not cancel it. Repeated clicks reuse the one active task, the determinate progress bar follows that shared task, and a native notification reports completion or failure.
+- Qwen's own punctuation flows through STM's existing spoken-punctuation and guarded Edge-Punct-Casing passes. The postprocessor accepts punctuation/capitalization only when the recognized word sequence is unchanged.
 - Optional spoken commands accept only `command <saved shortcut title>` or `run command <saved shortcut title>`. Matching is exact after case and punctuation normalization; dictated shell text is never executed.
 
-The Parakeet model is NVIDIA Parakeet TDT 0.6B v3 int8 under CC-BY-4.0. The bundled sherpa-onnx runtime is Apache-2.0, and ONNX Runtime is MIT licensed. Runtime notices are included in the app bundle; downloaded models include an attribution file. The bundled Edge-Punct-Casing model's source URL and verified archive/model hashes are recorded in `Resources/PunctuationModel/MODEL_METADATA.txt`.
+The local model is `mlx-community/Qwen3-ASR-0.6B-8bit` at pinned revision `89e96d92ba34aca20b3e29fb10cc284097d1219f`, derived from Apache-2.0 `Qwen/Qwen3-ASR-0.6B`. Runtime dependencies are hash-locked around MIT-licensed `mlx-audio` 0.5.3 and installed with the bundled, SHA-256-pinned `uv` 0.8.5 binary. Runtime and model notices are included in the app bundle or installed model folder. The bundled Edge-Punct-Casing model's source URL and verified hashes remain recorded in `Resources/PunctuationModel/MODEL_METADATA.txt`.
 
 ### Cloudflare Worker transcription
 
-The Cloudflare Worker sends recorded audio to the selected speech-to-text model. It returns that model's transcript directly; STM does not send the text to a general chat model or accept generated replacement wording.
+The Cloudflare Worker is the default and preferred transcription engine. It sends recorded audio to the selected speech-to-text model and returns that model's transcript directly; STM does not send the text to a general chat model or accept generated replacement wording.
 
 If you do not have credentials yet:
 

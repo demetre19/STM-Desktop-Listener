@@ -15,7 +15,7 @@ BIN="$APP/Contents/MacOS/STM Desktop Listener"
 TMP="$ROOT/dist/build-tmp"
 SHERPA_DIR="$ROOT/Vendor/sherpa-onnx"
 SHERPA_LIB="$SHERPA_DIR/libsherpa-onnx.a"
-PARAKEET_BRIDGE_HEADER="$ROOT/Sources/ParakeetBridge.h"
+SPEECH_BRIDGE_HEADER="$ROOT/Sources/SpeechBridge.h"
 ONNXRUNTIME_DIR="$ROOT/Vendor/onnxruntime"
 ONNXRUNTIME_LIB="$ONNXRUNTIME_DIR/libonnxruntime.1.27.0.dylib"
 WEBP_DIR="$ROOT/Vendor/webp"
@@ -25,6 +25,9 @@ ONNXRUNTIME_BUNDLE_NAME="libonnxruntime.1.dylib"
 PUNCTUATION_SOURCE="$ROOT/Resources/PunctuationModel"
 PUNCTUATION_MODEL_SHA256="9d611f445fe4a46186080fe161be6059d87d72eb88d3a8cb00c1a06e83a6067e"
 PUNCTUATION_VOCAB_SHA256="e118b7ad88c54db562517df49e1cffd4836d166c34fb190fd311d7f34eb238f5"
+QWEN_RUNTIME_SOURCE="$ROOT/Resources/QwenRuntime"
+UV_DIR="$ROOT/Vendor/uv"
+UV_SHA256="c59d3ed8e54e863e49393227f30cb19ac894010e1d703f60cd67d1568bf852fe"
 
 rm -rf "$APP" "$TMP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks" "$TMP"
@@ -61,6 +64,19 @@ fi
 if [[ -f "$SHERPA_DIR/LICENSE" ]]; then
   cp "$SHERPA_DIR/LICENSE" "$APP/Contents/Resources/sherpa-onnx-LICENSE"
 fi
+UV_ACTUAL="$(shasum -a 256 "$UV_DIR/uv" | cut -d ' ' -f 1)"
+if [[ "$UV_ACTUAL" != "$UV_SHA256" ]]; then
+  echo "Bundled uv integrity verification failed." >&2
+  exit 1
+fi
+mkdir -p "$APP/Contents/Resources/QwenRuntime"
+cp "$UV_DIR/uv" "$APP/Contents/Resources/QwenRuntime/uv"
+chmod 755 "$APP/Contents/Resources/QwenRuntime/uv"
+cp "$UV_DIR/LICENSE-APACHE" "$APP/Contents/Resources/QwenRuntime/uv-LICENSE-APACHE"
+cp "$UV_DIR/LICENSE-MIT" "$APP/Contents/Resources/QwenRuntime/uv-LICENSE-MIT"
+cp "$UV_DIR/STM_VENDOR_REVISION.txt" "$APP/Contents/Resources/QwenRuntime/uv-REVISION"
+cp "$QWEN_RUNTIME_SOURCE/requirements.lock" "$APP/Contents/Resources/QwenRuntime/requirements.lock"
+cp "$QWEN_RUNTIME_SOURCE/qwen_helper.py" "$APP/Contents/Resources/QwenRuntime/qwen_helper.py"
 cp "$ONNXRUNTIME_LIB" "$APP/Contents/Frameworks/$ONNXRUNTIME_BUNDLE_NAME"
 cp "$ONNXRUNTIME_DIR/LICENSE" "$APP/Contents/Resources/onnxruntime-LICENSE"
 cp "$WEBP_DIR/LICENSE" "$APP/Contents/Resources/webp-LICENSE"
@@ -97,13 +113,13 @@ FRAMEWORKS=(
 build_arch() {
   local arch="$1"
   local out="$2"
-  local bridge_object="$TMP/ParakeetBridge-$arch.o"
+  local bridge_object="$TMP/SpeechBridge-$arch.o"
   local webp_bridge_object="$TMP/WebPBridge-$arch.o"
   MACOSX_DEPLOYMENT_TARGET=14.0 xcrun clang \
     -arch "$arch" \
     -mmacosx-version-min=14.0 \
     -I"$SHERPA_DIR" \
-    -c "$ROOT/Sources/ParakeetBridge.c" \
+    -c "$ROOT/Sources/SpeechBridge.c" \
     -o "$bridge_object"
   MACOSX_DEPLOYMENT_TARGET=14.0 xcrun clang \
     -arch "$arch" \
@@ -117,10 +133,10 @@ build_arch() {
     "$ONNXRUNTIME_LIB" \
     "$WEBP_LIB" \
     "$SHARPYUV_LIB" \
+    -lc++ \
     -Xlinker -rpath \
     -Xlinker "@executable_path/../Frameworks" \
-    -lc++ \
-    -import-objc-header "$PARAKEET_BRIDGE_HEADER" \
+    -import-objc-header "$SPEECH_BRIDGE_HEADER" \
     -debug-prefix-map "$ROOT=." \
     -file-prefix-map "$ROOT=." \
     -target "$arch-apple-macos14.0" \

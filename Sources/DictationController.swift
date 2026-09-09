@@ -100,6 +100,21 @@ final class DictationController {
         try? ConfigStore.set(model.id, for: "transcriptionModel")
         Logger.log("dictation model selected id=\(model.id) label=\(model.label)")
     }
+    func preloadLocalModelIfSelected() {
+        guard DictationLocalConfiguration.load().engine == .qwen,
+              let modelURL = QwenModelManager.resolvedModelURL(),
+              QwenRuntimeManager.isInstalled else {
+            return
+        }
+        Task {
+            do {
+                try await QwenTranscriber.preloadAsync(modelURL: modelURL)
+            } catch {
+                Logger.log("qwen local preload failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
 
     func importCredentials(from url: URL) throws -> Bool {
         let data = try Data(contentsOf: url)
@@ -154,8 +169,12 @@ final class DictationController {
                 return
             }
         } else {
-            guard ParakeetModelManager.resolvedModelURL() != nil else {
-                onError?("Parakeet model missing", "Download Parakeet or select Orca's existing model in Voice AI settings.")
+            guard QwenRuntimeManager.isInstalled,
+                  QwenModelManager.resolvedModelURL() != nil else {
+                onError?(
+                    "Qwen3-ASR is not ready",
+                    "Download and install Qwen3-ASR in Voice AI settings before using local transcription."
+                )
                 return
             }
         }
@@ -547,11 +566,12 @@ final class DictationController {
             }
         }
 
-        if DictationLocalConfiguration.load().engine == .parakeet {
-            guard let modelURL = ParakeetModelManager.resolvedModelURL() else {
-                throw SimpleError("The configured Parakeet model is unavailable.")
+        if DictationLocalConfiguration.load().engine == .qwen {
+            guard let modelURL = QwenModelManager.resolvedModelURL(),
+                  QwenRuntimeManager.isInstalled else {
+                throw SimpleError("The Qwen3-ASR local engine is unavailable.")
             }
-            return try await ParakeetTranscriber.transcribeAsync(waveURL: uploadChunk.url, modelURL: modelURL)
+            return try await QwenTranscriber.transcribeAsync(waveURL: uploadChunk.url, modelURL: modelURL)
         }
 
         do {

@@ -1,0 +1,5 @@
+uv 0.8.5 (Homebrew 2025-08-05)
+Source: https://github.com/astral-sh/uv
+Binary: darwin-arm64
+SHA-256: c59d3ed8e54e863e49393227f30cb19ac894010e1d703f60cd67d1568bf852fe
+Licenses: Apache-2.0 OR MIT
