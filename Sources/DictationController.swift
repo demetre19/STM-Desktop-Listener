@@ -101,8 +101,11 @@ final class DictationController {
         Logger.log("dictation model selected id=\(model.id) label=\(model.label)")
     }
     func preloadLocalModelIfSelected() {
-        guard DictationLocalConfiguration.load().engine == .qwen,
-              let modelURL = QwenModelManager.resolvedModelURL(),
+        guard DictationLocalConfiguration.load().engine == .qwen else {
+            QwenTranscriber.reset()
+            return
+        }
+        guard let modelURL = QwenModelManager.resolvedModelURL(),
               QwenRuntimeManager.isInstalled else {
             return
         }
@@ -210,6 +213,16 @@ final class DictationController {
             startRecordingTimers()
             emitRecordingState()
             Logger.log("dictation recording started liveChunks=true sampleRate=\(Int(format.sampleRate)) channels=\(format.channelCount)")
+            if localConfiguration.engine == .qwen,
+               let modelURL = QwenModelManager.resolvedModelURL() {
+                Task {
+                    do {
+                        try await QwenTranscriber.warmAsync(modelURL: modelURL)
+                    } catch {
+                        Logger.log("qwen recording warm failed: \(error.localizedDescription)")
+                    }
+                }
+            }
         } catch {
             input.removeTap(onBus: 0)
             audioLock.lock()
