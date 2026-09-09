@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
         hotkeys.registerEnabledFeatureHotkeys()
         features.featureStateChanged()
+        features.dictation.preloadLocalModelIfSelected()
         setIdleIcon()
         LoginItemService.registerByDefaultIfNeeded()
         if openFeaturesOnLaunch {
@@ -51,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         features.stopCaptureCache()
         dictationHUD.hide()
         features.dictation.cancel()
+        QwenTranscriber.reset()
         automaticUpdateCheckTask?.cancel()
         automaticUpdateCheckTask = nil
         updateCheckTask?.cancel()
@@ -361,6 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 onSettingsChanged: { [weak self] in
                     self?.hotkeys.registerEnabledFeatureHotkeys()
                     self?.features.featureStateChanged()
+                    self?.features.dictation.preloadLocalModelIfSelected()
                     self?.refreshMenu()
                 },
                 onImportCredentials: { [weak self] in self?.importCredentials() },

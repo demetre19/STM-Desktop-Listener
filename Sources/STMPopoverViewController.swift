@@ -293,7 +293,7 @@ final class STMPopoverViewController: NSViewController {
     private func dictationCard() -> NSView {
         let current = TranscriptionModel.load()
         var rows: [NSView] = [
-            infoBox("Choose the transcription model here. Local Parakeet and spoken commands are configured in Voice AI settings."),
+            infoBox("Cloudflare is preferred. Download and select Qwen3-ASR in Voice AI settings when private local transcription is needed."),
             groupTitle("Model", symbol: "waveform")
         ]
         for model in TranscriptionModel.all {

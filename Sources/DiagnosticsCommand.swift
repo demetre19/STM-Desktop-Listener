@@ -6,7 +6,7 @@ enum DiagnosticsCommand {
         let args = Array(CommandLine.arguments.dropFirst())
         guard args.contains("--diagnostics")
                 || args.contains("--self-test-screenshot")
-                || args.contains("--parakeet-transcribe")
+                || args.contains("--qwen-transcribe")
                 || args.contains("--voice-intent-self-test")
                 || args.contains("--mouse-jiggle-once")
                 || args.contains("--request-screen-permission")
@@ -16,8 +16,8 @@ enum DiagnosticsCommand {
 
         do {
             let payload: [String: Any]
-            if args.contains("--parakeet-transcribe") {
-                payload = try parakeetSelfTest(args: args)
+            if args.contains("--qwen-transcribe") {
+                payload = try qwenSelfTest(args: args)
             } else if args.contains("--voice-intent-self-test") {
                 payload = try voiceIntentSelfTest()
             } else if args.contains("--self-test-screenshot") {
@@ -65,7 +65,8 @@ enum DiagnosticsCommand {
             ],
             "dictation": [
                 "transcriptionEngine": DictationLocalConfiguration.load().engine.rawValue,
-                "parakeetStatus": ParakeetModelManager.statusText(),
+                "qwenStatus": QwenModelManager.statusText(),
+                "qwenRuntimeInstalled": QwenRuntimeManager.isInstalled,
                 "voiceCommandsEnabled": DictationLocalConfiguration.load().voiceCommandsEnabled
             ] as [String: Any],
             "features": FeatureID.allCases.map { feature -> [String: Any] in
@@ -96,28 +97,30 @@ enum DiagnosticsCommand {
         return payload
     }
 
-    private static func parakeetSelfTest(args: [String]) throws -> [String: Any] {
-        guard let waveIndex = args.firstIndex(of: "--parakeet-transcribe"),
+    private static func qwenSelfTest(args: [String]) throws -> [String: Any] {
+        guard let waveIndex = args.firstIndex(of: "--qwen-transcribe"),
               args.indices.contains(waveIndex + 1) else {
-            throw SimpleError("Pass a WAV path after --parakeet-transcribe.")
+            throw SimpleError("Pass a WAV path after --qwen-transcribe.")
         }
         let waveURL = URL(fileURLWithPath: args[waveIndex + 1])
         let modelURL: URL
-        if let modelIndex = args.firstIndex(of: "--parakeet-model"),
+        if let modelIndex = args.firstIndex(of: "--qwen-model"),
            args.indices.contains(modelIndex + 1) {
             modelURL = URL(fileURLWithPath: args[modelIndex + 1], isDirectory: true)
-        } else if let configuredURL = ParakeetModelManager.resolvedModelURL() {
+        } else if let configuredURL = QwenModelManager.resolvedModelURL() {
             modelURL = configuredURL
-        } else if ParakeetModelManager.isValidModel(at: ParakeetModelManager.orcaModelURL) {
-            modelURL = ParakeetModelManager.orcaModelURL
         } else {
-            throw SimpleError("No valid Parakeet model is configured.")
+            throw SimpleError("No valid Qwen3-ASR model is configured.")
         }
-        guard ParakeetModelManager.isValidModel(at: modelURL) else {
-            throw SimpleError("The supplied Parakeet model folder is incomplete.")
+        guard QwenRuntimeManager.isInstalled else {
+            throw SimpleError("The Qwen3-ASR local runtime is not installed.")
         }
+        guard QwenModelManager.isValidModel(at: modelURL) else {
+            throw SimpleError("The supplied Qwen3-ASR model folder is incomplete.")
+        }
+        defer { QwenTranscriber.reset() }
         let started = Date()
-        let text = try ParakeetTranscriber.transcribe(waveURL: waveURL, modelURL: modelURL)
+        let text = try QwenTranscriber.transcribe(waveURL: waveURL, modelURL: modelURL)
         return [
             "characters": text.count,
             "elapsedMilliseconds": Int(Date().timeIntervalSince(started) * 1000),

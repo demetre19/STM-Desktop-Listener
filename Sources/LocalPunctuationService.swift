@@ -20,7 +20,7 @@ enum LocalPunctuationService {
         }
         defer {
             if let errorPointer {
-                STMParakeetFreeString(errorPointer)
+                STMFreeString(errorPointer)
             }
         }
 
@@ -29,7 +29,7 @@ enum LocalPunctuationService {
             Logger.log("local punctuation failed: \(message)")
             return SpokenDictationFormatter.applyingAutomaticPunctuation(candidate: text, to: text)
         }
-        defer { STMParakeetFreeString(candidatePointer) }
+        defer { STMFreeString(candidatePointer) }
 
         let candidate = String(cString: candidatePointer)
         return SpokenDictationFormatter.applyingAutomaticPunctuation(candidate: candidate, to: text)
