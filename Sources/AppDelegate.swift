@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Logger.log("app launch dictationLiveChunks=true firstChunkSeconds=60 subsequentChunkSeconds=20 normalizedUpload=16kMono uploadConcurrency=2 alertTopClose=true")
+        Logger.log("app launch dictationLiveChunks=true workerFirstChunkSeconds=60 workerSubsequentChunkSeconds=20 qwenQuietSearchSeconds=12 qwenMaximumChunkSeconds=16 normalizedUpload=16kMono workerUploadConcurrency=2 qwenConcurrency=1 alertTopClose=true")
         setupRuntimeEventLogging()
         STMNotifier.configure(delegate: self)
         setupCallbacks()

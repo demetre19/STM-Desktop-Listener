@@ -56,6 +56,9 @@ final class DictationController {
     private var transcriptionFailure: Error?
     private var transcriptionTasks: [Int: Task<Void, Never>] = [:]
     private var transcriptionGeneration = 0
+    private var activeTranscriptionEngine: DictationTranscriptionEngine = .worker
+    private var qwenLiveChunkPolicy = QwenLiveChunkPolicy()
+    private var chunkRotationPending = false
 
     private var isBusy = false
     private var currentModel = TranscriptionModel.load()
@@ -193,6 +196,7 @@ final class DictationController {
         }
 
         resetTranscriptionState()
+        activeTranscriptionEngine = localConfiguration.engine
 
         let engine = AVAudioEngine()
         let input = engine.inputNode
@@ -322,13 +326,18 @@ final class DictationController {
         if let recordingTimer = recordingTimer {
             RunLoop.main.add(recordingTimer, forMode: .common)
         }
-        scheduleChunkRotationTimer(after: Self.firstChunkSeconds())
+        scheduleChunkRotationTimer(
+            after: activeTranscriptionEngine == .qwen
+                ? QwenLiveChunkPolicy.maximumChunkSeconds
+                : Self.firstChunkSeconds()
+        )
     }
 
     private func scheduleChunkRotationTimer(after interval: TimeInterval) {
         chunkRotationTimer?.invalidate()
+        let expectedChunkIndex = currentChunkIndex
         chunkRotationTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-            self?.rotateRecordingChunk()
+            self?.rotateRecordingChunk(expectedChunkIndex: expectedChunkIndex, reason: "maximum")
         }
         if let chunkRotationTimer = chunkRotationTimer {
             RunLoop.main.add(chunkRotationTimer, forMode: .common)
@@ -358,6 +367,7 @@ final class DictationController {
     }
 
     private func writeAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+        var measuredDecibels: Float?
         if let samples = buffer.floatChannelData?[0] {
             let frameCount = Int(buffer.frameLength)
             var sum: Float = 0
@@ -370,6 +380,7 @@ final class DictationController {
             if sampleCount > 0 {
                 let rms = sqrt(sum / Float(sampleCount))
                 let decibels = 20 * log10(max(rms, 0.000_001))
+                measuredDecibels = decibels
                 let normalizedLevel = CGFloat(min(max((decibels + 52) / 44, 0), 1))
                 let level = sqrt(normalizedLevel)
                 DispatchQueue.main.async { [weak self] in
@@ -378,20 +389,50 @@ final class DictationController {
             }
         }
 
+        var rotation: (index: Int, reason: String)?
         audioLock.lock()
-        defer { audioLock.unlock() }
-        guard let writer = currentChunkWriter else { return }
-        do {
-            try writer.write(from: buffer)
-            currentChunkFrameCount += AVAudioFramePosition(buffer.frameLength)
-        } catch {
-            Logger.log("dictation audio write failed \(error.localizedDescription)")
+        if let writer = currentChunkWriter {
+            do {
+                try writer.write(from: buffer)
+                currentChunkFrameCount += AVAudioFramePosition(buffer.frameLength)
+                if activeTranscriptionEngine == .qwen,
+                   !chunkRotationPending,
+                   let measuredDecibels = measuredDecibels,
+                   buffer.format.sampleRate > 0 {
+                    let chunkDuration = TimeInterval(currentChunkFrameCount) / buffer.format.sampleRate
+                    let bufferDuration = TimeInterval(buffer.frameLength) / buffer.format.sampleRate
+                    if let decision = qwenLiveChunkPolicy.observe(
+                        chunkDuration: chunkDuration,
+                        bufferDuration: bufferDuration,
+                        decibels: measuredDecibels
+                    ) {
+                        chunkRotationPending = true
+                        rotation = (currentChunkIndex, decision.rawValue)
+                    }
+                }
+            } catch {
+                Logger.log("dictation audio write failed \(error.localizedDescription)")
+            }
+        }
+        audioLock.unlock()
+
+        if let rotation = rotation {
+            DispatchQueue.main.async { [weak self] in
+                self?.rotateRecordingChunk(
+                    expectedChunkIndex: rotation.index,
+                    reason: rotation.reason
+                )
+            }
         }
     }
 
-    private func rotateRecordingChunk() {
+    private func rotateRecordingChunk(expectedChunkIndex: Int? = nil, reason: String = "timer") {
         guard audioEngine != nil else { return }
         audioLock.lock()
+        guard expectedChunkIndex == nil || expectedChunkIndex == currentChunkIndex else {
+            audioLock.unlock()
+            return
+        }
         let completed = closeCurrentChunkLocked()
         do {
             let format = audioEngine?.inputNode.outputFormat(forBus: 0)
@@ -405,10 +446,17 @@ final class DictationController {
         audioLock.unlock()
 
         if let completed = completed {
+            if activeTranscriptionEngine == .qwen {
+                Logger.log("dictation qwen live boundary index=\(completed.index) reason=\(reason)")
+            }
             enqueueChunk(completed)
         }
         if transcriptionFailure == nil, audioEngine != nil {
-            scheduleChunkRotationTimer(after: Self.subsequentChunkSeconds())
+            scheduleChunkRotationTimer(
+                after: activeTranscriptionEngine == .qwen
+                    ? QwenLiveChunkPolicy.maximumChunkSeconds
+                    : Self.subsequentChunkSeconds()
+            )
         }
         startNextChunkIfNeeded()
     }
@@ -425,6 +473,8 @@ final class DictationController {
         let chunkURL = FileManager.default.temporaryDirectory.appendingPathComponent("stm-desktop-listener-\(UUID().uuidString)-live-\(currentChunkIndex).wav")
         currentChunkWriter = try AVAudioFile(forWriting: chunkURL, settings: format.settings)
         currentChunkURL = chunkURL
+        qwenLiveChunkPolicy.reset()
+        chunkRotationPending = false
     }
 
     private func closeCurrentChunkLocked() -> AudioChunk? {
@@ -454,7 +504,7 @@ final class DictationController {
             return
         }
 
-        let maxConcurrent = Self.maxConcurrentChunkTranscriptions()
+        let maxConcurrent = maxConcurrentChunkTranscriptions()
         while activeChunkTranscriptionCount < maxConcurrent, !pendingChunks.isEmpty {
             startChunkTranscription(pendingChunks.removeFirst())
         }
@@ -579,7 +629,7 @@ final class DictationController {
             }
         }
 
-        if DictationLocalConfiguration.load().engine == .qwen {
+        if activeTranscriptionEngine == .qwen {
             guard let modelURL = QwenModelManager.resolvedModelURL(),
                   QwenRuntimeManager.isInstalled else {
                 throw SimpleError("The Qwen3-ASR local engine is unavailable.")
@@ -821,9 +871,12 @@ final class DictationController {
         return min(max(5, configured), 60)
     }
 
-    private static func maxConcurrentChunkTranscriptions() -> Int {
-        let configured = ConfigStore.int("dictationUploadConcurrency", default: defaultChunkUploadConcurrency)
-        return min(max(1, configured), maxChunkUploadConcurrency)
+    private func maxConcurrentChunkTranscriptions() -> Int {
+        if activeTranscriptionEngine == .qwen {
+            return 1
+        }
+        let configured = ConfigStore.int("dictationUploadConcurrency", default: Self.defaultChunkUploadConcurrency)
+        return min(max(1, configured), Self.maxChunkUploadConcurrency)
     }
 
     private func emitProcessingState() {
