@@ -126,6 +126,7 @@ Implementation details:
 - Runtime: private Python 3.10.18 environment with `mlx-audio` 0.5.3 and transitive dependencies from a hash-locked manifest. The app bundles pinned arm64 `uv` 0.8.5 and verifies its SHA-256 before execution.
 - Process model: one isolated JSON-lines helper validates WAV paths/headers, caps inputs at 512 MiB, loads Qwen once, stays resident while local mode is used, and is stopped at app termination.
 - Installer UX: a persistent model-parent folder picker, application-scoped single-flight task, byte/phase progress bar that survives leaving Settings, disabled duplicate starts, and native success/failure notifications.
+- Lifecycle hardening: the helper was proven to remain alive for more than two hours, but macOS could page/compress its idle MLX working set and silence heartbeats could decode without a bound. Qwen now performs a single-token prewarm before reporting ready, starts its timer only after readiness, receives a single-token warm touch when recording begins, repeats that touch every 15 seconds after 10 seconds idle, caps real transcription tokens from WAV duration, restarts after unexpected exit, and retries one in-flight transport failure. Cloudflare selection releases the local helper and roughly 1.8GB working set.
 - Current workstation: the model is stored under `/Volumes/TheHoneyBadger/STM Desktop Listener Models/qwen3-asr-0.6b-8bit`; config remains mode `0600`.
 - The alternative pure-C Qwen runtime was rejected after exceeding 120 seconds on the 18.576-second proof WAV on this M1.
 
@@ -137,6 +138,13 @@ Installed proof:
 - Final Cloudflare regression returned HTTP 200 in 2.63 seconds with 561 characters and no error field.
 - Diagnostics reported `transcriptionEngine=worker`, `qwenRuntimeInstalled=true`, and Qwen status ready.
 - The relaunched Voice AI UI showed Cloudflare preferred, Qwen installed/ready, the external model folder, and a full progress indicator.
+- Lifecycle diagnosis showed one helper remained alive for more than two hours; perceived coldness came from macOS paging/compressing its 1.8GB MLX working set and from unbounded short/noisy decoding.
+- The final installed single-token heartbeat ran seven consecutive times without reload at 636ms, 1,275ms, 1,988ms, 1,911ms, 832ms, 1,048ms, and 573ms.
+- A verified helper child was terminated with status 15; STM automatically prewarmed a replacement process and logged recovery, after which heartbeats returned to 487–574ms.
+- The duration-bounded 18.576-second transcript used `maxTokens=127`, completed in 3.087 seconds after warmup, and preserved every difficult word and punctuation target.
+- The Qwen 4-bit model was rejected: it still peaked at 1.56GB, processed the proof in 3.51 seconds, and regressed `epitome` plus numeric formatting.
+- A residual startup case was traced at `07:54:42`: the hotkey fired, the warm touch finished at `07:54:43`, but microphone recording did not report started until `07:54:45`. The async MLX touch had been launched before `AVAudioEngine.start()` and competed with microphone startup. The final ordering starts audio/HUD first and launches the warm touch immediately afterward, hiding that work while the user speaks.
+- After the final reinstall, one dictation fired while the one-time app-launch preload was still running and took about four seconds to start recording. Once `qwen local runtime ready` appeared, the next observed test started the microphone in about one second, ran its 3.2-second warm touch during speech, and transcribed in 3.0 seconds. This distinguishes expected post-launch preload contention from the fixed idle-cooldown bug.
 
 ## Next steps if picked up later
 

@@ -7,6 +7,7 @@ import tempfile
 import traceback
 import time
 import uuid
+import wave
 
 MAX_AUDIO_BYTES = 512 * 1024 * 1024
 
@@ -35,6 +36,16 @@ def validated_wav_path(value):
         raise ValueError("The transcription input is not a valid WAV file.")
     return path
 
+def wav_duration_seconds(path):
+    try:
+        with wave.open(path, "rb") as recording:
+            frame_rate = recording.getframerate()
+            if frame_rate <= 0:
+                raise ValueError("The WAV sample rate is invalid.")
+            return recording.getnframes() / frame_rate
+    except (EOFError, wave.Error) as error:
+        raise ValueError("The transcription input is not a supported PCM WAV file.") from error
+
 
 def main():
     if len(sys.argv) != 2:
@@ -48,9 +59,12 @@ def main():
 
     try:
         with contextlib.redirect_stdout(sys.stderr):
+            import mlx.core as mx
             from mlx_audio.stt.generate import generate_transcription
             from mlx_audio.stt.utils import load_model
             model = load_model(model_path)
+            warm_audio = mx.zeros((16000,), dtype=mx.float32)
+            model.generate(warm_audio, verbose=False, max_tokens=1)
         emit({"type": "ready"})
     except Exception:
         traceback.print_exc(file=sys.stderr)
@@ -66,11 +80,23 @@ def main():
             if operation == "shutdown":
                 emit({"id": request_id, "ok": True})
                 return 0
+            if operation == "warm":
+                started = time.monotonic()
+                with contextlib.redirect_stdout(sys.stderr):
+                    model.generate(warm_audio, verbose=False, max_tokens=1)
+                emit({
+                    "id": request_id,
+                    "ok": True,
+                    "elapsedMilliseconds": int((time.monotonic() - started) * 1000),
+                })
+                continue
             if operation != "transcribe":
                 raise ValueError("Unsupported Qwen3-ASR helper operation.")
 
             started = time.monotonic()
             wav_path = validated_wav_path(request.get("path"))
+            duration_seconds = wav_duration_seconds(wav_path)
+            max_tokens = min(1024, max(24, int(duration_seconds * 6) + 16))
             output_stem = os.path.join(tempfile.gettempdir(), "stm-qwen-" + uuid.uuid4().hex)
             output_path = output_stem + ".txt"
             try:
@@ -81,6 +107,7 @@ def main():
                         output_path=output_stem,
                         format="txt",
                         verbose=False,
+                        max_tokens=max_tokens,
                     )
                 text = result.text.strip()
             finally:
@@ -96,6 +123,7 @@ def main():
                 "ok": True,
                 "text": text,
                 "elapsedMilliseconds": int((time.monotonic() - started) * 1000),
+                "maxTokens": max_tokens,
             })
         except Exception as error:
             traceback.print_exc(file=sys.stderr)

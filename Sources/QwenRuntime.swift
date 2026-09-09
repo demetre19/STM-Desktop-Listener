@@ -168,6 +168,12 @@ enum QwenTranscriber {
         }.value
     }
 
+    static func warmAsync(modelURL: URL) async throws {
+        try await Task.detached(priority: .utility) {
+            try QwenRuntimeProcess.shared.warm(modelURL: modelURL)
+        }.value
+    }
+
     static func transcribe(waveURL: URL, modelURL: URL) throws -> String {
         try QwenRuntimeProcess.shared.transcribe(waveURL: waveURL, modelURL: modelURL)
     }
@@ -183,15 +189,29 @@ enum QwenTranscriber {
     }
 }
 
+private enum QwenRuntimeTransportError: LocalizedError {
+    case disconnected(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .disconnected(let message): return message
+        }
+    }
+}
+
 private final class QwenRuntimeProcess {
     static let shared = QwenRuntimeProcess()
 
     private let lock = NSLock()
+    private let keepWarmQueue = DispatchQueue(label: "com.seotimemachines.stm.qwen-keep-warm", qos: .utility)
+    private var keepWarmTimer: DispatchSourceTimer?
     private var process: Process?
     private var inputHandle: FileHandle?
     private var outputHandle: FileHandle?
     private var outputBuffer = Data()
     private var loadedModelPath: String?
+    private var desiredModelURL: URL?
+    private var lastModelActivity = Date.distantPast
     private var nextRequestID = 1
 
     private init() {}
@@ -199,27 +219,101 @@ private final class QwenRuntimeProcess {
     func preload(modelURL: URL) throws {
         lock.lock()
         defer { lock.unlock() }
+        desiredModelURL = modelURL
         try ensureStartedLocked(modelURL: modelURL)
+        lastModelActivity = Date()
+        ensureKeepWarmTimerLocked()
+    }
+
+    func warm(modelURL: URL) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        desiredModelURL = modelURL
+        try ensureStartedLocked(modelURL: modelURL)
+        let elapsed = try requestWarmLocked()
+        lastModelActivity = Date()
+        ensureKeepWarmTimerLocked()
+        Logger.log("qwen local recording warm elapsedMs=\(elapsed)")
     }
 
     func transcribe(waveURL: URL, modelURL: URL) throws -> String {
         lock.lock()
         defer { lock.unlock() }
-        try ensureStartedLocked(modelURL: modelURL)
-        return try requestTranscriptionLocked(waveURL: waveURL)
+        desiredModelURL = modelURL
+
+        do {
+            try ensureStartedLocked(modelURL: modelURL)
+            let text = try requestTranscriptionLocked(waveURL: waveURL)
+            lastModelActivity = Date()
+            ensureKeepWarmTimerLocked()
+            return text
+        } catch let transportError as QwenRuntimeTransportError {
+            Logger.log("qwen helper transport failure; restarting once: \(transportError.localizedDescription)")
+            stopProcessLocked()
+            try ensureStartedLocked(modelURL: modelURL)
+            let text = try requestTranscriptionLocked(waveURL: waveURL)
+            lastModelActivity = Date()
+            ensureKeepWarmTimerLocked()
+            return text
+        }
     }
 
     func stop() {
         lock.lock()
         defer { lock.unlock() }
-        stopLocked()
+        desiredModelURL = nil
+        keepWarmTimer?.cancel()
+        keepWarmTimer = nil
+        stopProcessLocked()
+    }
+
+    private func ensureKeepWarmTimerLocked() {
+        guard keepWarmTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: keepWarmQueue)
+        timer.schedule(deadline: .now() + .seconds(15), repeating: .seconds(15), leeway: .seconds(1))
+        timer.setEventHandler { [weak self] in
+            self?.keepWarmIfNeeded()
+        }
+        keepWarmTimer = timer
+        timer.resume()
+    }
+
+    private func keepWarmIfNeeded() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard DictationLocalConfiguration.load().engine == .qwen,
+              let modelURL = desiredModelURL else {
+            desiredModelURL = nil
+            keepWarmTimer?.cancel()
+            keepWarmTimer = nil
+            stopProcessLocked()
+            return
+        }
+        guard Date().timeIntervalSince(lastModelActivity) >= 10 else { return }
+
+        do {
+            try ensureStartedLocked(modelURL: modelURL)
+            let elapsed = try requestWarmLocked()
+            lastModelActivity = Date()
+            Logger.log("qwen local keep-warm elapsedMs=\(elapsed)")
+        } catch {
+            Logger.log("qwen local keep-warm failed: \(error.localizedDescription)")
+            stopProcessLocked()
+        }
     }
 
     private func ensureStartedLocked(modelURL: URL) throws {
         if let process, process.isRunning, loadedModelPath == modelURL.path {
             return
         }
-        stopLocked()
+        if let process, !process.isRunning {
+            Logger.log(
+                "qwen helper exited unexpectedly pid=\(process.processIdentifier) " +
+                "status=\(process.terminationStatus)"
+            )
+        }
+        stopProcessLocked()
 
         guard QwenRuntimeManager.isInstalled else {
             throw SimpleError("The Qwen3-ASR local runtime is not installed.")
@@ -248,6 +342,9 @@ private final class QwenRuntimeProcess {
         child.standardError = FileHandle.nullDevice
 
         try child.run()
+        child.terminationHandler = { [weak self] child in
+            self?.handleUnexpectedTermination(child)
+        }
         process = child
         inputHandle = inputPipe.fileHandleForWriting
         outputHandle = outputPipe.fileHandleForReading
@@ -260,35 +357,28 @@ private final class QwenRuntimeProcess {
                 let message = response["error"] as? String ?? "Qwen3-ASR failed to become ready."
                 throw SimpleError(message)
             }
-            Logger.log("qwen local runtime ready model=Qwen3-ASR-0.6B-8bit")
+            Logger.log(
+                "qwen local runtime ready model=Qwen3-ASR-0.6B-8bit " +
+                "pid=\(child.processIdentifier)"
+            )
         } catch {
-            stopLocked()
+            stopProcessLocked()
             throw error
         }
     }
 
     private func requestTranscriptionLocked(waveURL: URL) throws -> String {
-        let requestID = nextRequestID
-        nextRequestID += 1
-        let request: [String: Any] = [
-            "id": requestID,
+        let response = try sendRequestLocked([
+            "id": nextRequestIdentifierLocked(),
             "op": "transcribe",
             "path": waveURL.path,
-        ]
-        let data = try JSONSerialization.data(withJSONObject: request)
-        guard let inputHandle else {
-            throw SimpleError("The Qwen3-ASR helper is unavailable.")
-        }
-        try inputHandle.write(contentsOf: data + Data([0x0A]))
-        let response = try readResponseLocked()
-        guard response["id"] as? Int == requestID else {
-            throw SimpleError("The Qwen3-ASR helper returned an invalid response.")
-        }
+        ])
         guard response["ok"] as? Bool == true else {
             throw SimpleError(response["error"] as? String ?? "Qwen3-ASR transcription failed.")
         }
         if let elapsed = response["elapsedMilliseconds"] as? Int {
-            Logger.log("qwen local transcription elapsedMs=\(elapsed)")
+            let maxTokens = response["maxTokens"] as? Int ?? 0
+            Logger.log("qwen local transcription elapsedMs=\(elapsed) maxTokens=\(maxTokens)")
         }
         guard let text = response["text"] as? String,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -297,40 +387,122 @@ private final class QwenRuntimeProcess {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func requestWarmLocked() throws -> Int {
+        let response = try sendRequestLocked([
+            "id": nextRequestIdentifierLocked(),
+            "op": "warm",
+        ])
+        guard response["ok"] as? Bool == true else {
+            throw SimpleError(response["error"] as? String ?? "Qwen3-ASR keep-warm failed.")
+        }
+        return response["elapsedMilliseconds"] as? Int ?? 0
+    }
+
+    private func nextRequestIdentifierLocked() -> Int {
+        let requestID = nextRequestID
+        nextRequestID += 1
+        return requestID
+    }
+
+    private func sendRequestLocked(_ request: [String: Any]) throws -> [String: Any] {
+        guard let requestID = request["id"] as? Int else {
+            throw QwenRuntimeTransportError.disconnected("The Qwen3-ASR request is invalid.")
+        }
+        let data = try JSONSerialization.data(withJSONObject: request)
+        guard let inputHandle else {
+            throw QwenRuntimeTransportError.disconnected("The Qwen3-ASR helper is unavailable.")
+        }
+        do {
+            try inputHandle.write(contentsOf: data + Data([0x0A]))
+        } catch {
+            throw QwenRuntimeTransportError.disconnected("The Qwen3-ASR helper connection closed.")
+        }
+        let response = try readResponseLocked()
+        guard response["id"] as? Int == requestID else {
+            throw QwenRuntimeTransportError.disconnected("The Qwen3-ASR helper returned an invalid response.")
+        }
+        return response
+    }
+
     private func readResponseLocked() throws -> [String: Any] {
         while true {
             if let newline = outputBuffer.firstIndex(of: 0x0A) {
                 let line = outputBuffer.prefix(upTo: newline)
                 outputBuffer.removeSubrange(...newline)
                 guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
-                    throw SimpleError("The Qwen3-ASR helper returned malformed data.")
+                    throw QwenRuntimeTransportError.disconnected("The Qwen3-ASR helper returned malformed data.")
                 }
                 return object
             }
             guard outputBuffer.count < 4 * 1024 * 1024 else {
-                throw SimpleError("The Qwen3-ASR helper response exceeded its safety limit.")
+                throw QwenRuntimeTransportError.disconnected("The Qwen3-ASR helper response exceeded its safety limit.")
             }
             guard let outputHandle else {
-                throw SimpleError("The Qwen3-ASR helper output is unavailable.")
+                throw QwenRuntimeTransportError.disconnected("The Qwen3-ASR helper output is unavailable.")
             }
             let data = outputHandle.availableData
             guard !data.isEmpty else {
-                throw SimpleError("The Qwen3-ASR helper exited unexpectedly.")
+                throw QwenRuntimeTransportError.disconnected("The Qwen3-ASR helper exited unexpectedly.")
             }
             outputBuffer.append(data)
         }
     }
 
-    private func stopLocked() {
+    private func handleUnexpectedTermination(_ child: Process) {
+        lock.lock()
+        guard process === child else {
+            lock.unlock()
+            return
+        }
+        Logger.log(
+            "qwen helper process ended unexpectedly pid=\(child.processIdentifier) " +
+            "status=\(child.terminationStatus)"
+        )
+        clearProcessReferencesLocked()
+        let shouldRestart = desiredModelURL != nil &&
+            DictationLocalConfiguration.load().engine == .qwen
+        lock.unlock()
+
+        guard shouldRestart else { return }
+        keepWarmQueue.asyncAfter(deadline: .now() + .seconds(1)) { [weak self] in
+            self?.restartAfterUnexpectedExit()
+        }
+    }
+
+    private func restartAfterUnexpectedExit() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard DictationLocalConfiguration.load().engine == .qwen,
+              let modelURL = desiredModelURL,
+              process?.isRunning != true else {
+            return
+        }
+        do {
+            try ensureStartedLocked(modelURL: modelURL)
+            lastModelActivity = Date()
+            Logger.log("qwen helper recovered after unexpected exit")
+        } catch {
+            Logger.log("qwen helper recovery failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func clearProcessReferencesLocked() {
         inputHandle?.closeFile()
         outputHandle?.closeFile()
-        if let process, process.isRunning {
-            process.terminate()
-        }
         process = nil
         inputHandle = nil
         outputHandle = nil
         outputBuffer.removeAll(keepingCapacity: false)
         loadedModelPath = nil
+    }
+
+    private func stopProcessLocked() {
+        if let process, process.isRunning {
+            process.terminationHandler = nil
+            inputHandle?.closeFile()
+            outputHandle?.closeFile()
+            process.terminate()
+        }
+        clearProcessReferencesLocked()
     }
 }
