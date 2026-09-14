@@ -157,7 +157,13 @@ final class STMPopoverViewController: NSViewController {
         container.addSubview(row)
         pin(row, to: container, inset: 20)
 
-        // One-level quit: small red door icon in the hero's top-right corner, same action as Tools > Quit.
+        // One-level settings + quit: white cog opens Settings directly; red door quits.
+        let settings = STMActionButton(title: "Settings", target: self, action: #selector(openSettings))
+        settings.symbolName = "gearshape"
+        settings.toolTip = "Open Settings"
+        settings.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(settings)
+
         let exit = STMActionButton(title: "Exit", target: self, action: #selector(quitApp))
         exit.symbolName = "door.right.hand.open"
         exit.toolTip = "Quit STM Desktop Listener"
@@ -170,7 +176,11 @@ final class STMPopoverViewController: NSViewController {
             exit.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
             exit.widthAnchor.constraint(equalToConstant: 30),
             exit.heightAnchor.constraint(equalToConstant: 30),
-            texts.trailingAnchor.constraint(lessThanOrEqualTo: exit.leadingAnchor, constant: -12)
+            settings.topAnchor.constraint(equalTo: exit.topAnchor),
+            settings.trailingAnchor.constraint(equalTo: exit.leadingAnchor, constant: -10),
+            settings.widthAnchor.constraint(equalToConstant: 30),
+            settings.heightAnchor.constraint(equalToConstant: 30),
+            texts.trailingAnchor.constraint(lessThanOrEqualTo: settings.leadingAnchor, constant: -12)
         ])
         return container
     }
@@ -303,7 +313,8 @@ final class STMPopoverViewController: NSViewController {
         rows.append(featureRow(.dictation))
         rows.append(featureRow(.dictationPolish))
         rows.append(buttonGrid([
-            action("Voice AI Settings", #selector(openAIPolishSettings))
+            action("Voice AI Settings", #selector(openAIPolishSettings)),
+            action("Word Substitutions", #selector(openAIPolishSettings))
         ]))
         return card(title: "Dictation", symbol: "waveform", subtitle: "Model, dictation, and polish controls in one tab.", views: rows)
     }

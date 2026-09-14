@@ -3,6 +3,7 @@ import Carbon
 
 enum FeatureID: String, CaseIterable, Codable {
     case screenshot
+    case screenshotRepeat
     case ocr
     case dictation
     case dictationPolish
@@ -22,6 +23,7 @@ enum FeatureID: String, CaseIterable, Codable {
 
     var title: String {
         switch self {
+        case .screenshotRepeat: return "Repeat Last Screenshot"
         case .screenshot: return "Screenshot Tool"
         case .ocr: return "OCR Text Sniper"
         case .dictation: return "Voice Dictation"
@@ -53,6 +55,8 @@ enum FeatureID: String, CaseIterable, Codable {
         switch self {
         case .screenshot:
             return Shortcut(keyCode: UInt32(kVK_ANSI_S), carbonModifiers: UInt32(cmdKey | shiftKey), cgModifiers: [.maskCommand, .maskShift], label: "Cmd+Shift+S")
+        case .screenshotRepeat:
+            return Shortcut(keyCode: UInt32(kVK_ANSI_5), carbonModifiers: UInt32(cmdKey | shiftKey), cgModifiers: [.maskCommand, .maskShift], label: "Cmd+Shift+5")
         case .ocr:
             return Shortcut(keyCode: UInt32(kVK_ANSI_O), carbonModifiers: UInt32(controlKey | optionKey), cgModifiers: [.maskControl, .maskAlternate], label: "Ctrl+Alt+O")
         case .dictation:
@@ -92,7 +96,7 @@ enum FeatureID: String, CaseIterable, Codable {
             return Shortcut(keyCode: UInt32(kVK_ANSI_S), carbonModifiers: UInt32(cmdKey | shiftKey), cgModifiers: [.maskCommand, .maskShift], label: "Cmd+Shift+S")
         case .colorPicker:
             return Shortcut(keyCode: UInt32(kVK_ANSI_P), carbonModifiers: UInt32(cmdKey | shiftKey), cgModifiers: [.maskCommand, .maskShift], label: "Cmd+Shift+P")
-        case .textTransformers, .textCapitalCase, .textLowerCase, .textUpperCase, .textSentenceCase, .textSlugify, .ocr, .dictation, .dictationPolish, .pixelMeasurement, .imageOptimizer, .copyFinderPath, .newFile, .commandShortcuts, .mouseJiggler:
+        case .textTransformers, .textCapitalCase, .textLowerCase, .textUpperCase, .textSentenceCase, .textSlugify, .ocr, .dictation, .dictationPolish, .pixelMeasurement, .imageOptimizer, .copyFinderPath, .newFile, .commandShortcuts, .mouseJiggler, .screenshotRepeat:
             return nil
         }
     }

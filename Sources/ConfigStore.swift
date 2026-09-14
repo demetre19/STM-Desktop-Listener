@@ -95,6 +95,19 @@ enum ConfigStore {
         }
     }
 
+    static func stringDictionary(_ key: String) -> [String: String] {
+        guard let value = read()[key] as? [String: Any] else { return [:] }
+        var result: [String: String] = [:]
+        for (rawKey, rawValue) in value {
+            let cleanedKey = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let stringValue = rawValue as? String else { continue }
+            let cleanedValue = stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleanedKey.isEmpty, !cleanedValue.isEmpty else { continue }
+            result[cleanedKey] = cleanedValue
+        }
+        return result
+    }
+
     static func set(_ value: Any, for key: String) throws {
         var json = read()
         json[key] = value

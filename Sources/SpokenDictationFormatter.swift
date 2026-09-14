@@ -91,6 +91,16 @@ enum SpokenDictationFormatter {
         text = replacingMatches(in: text, pattern: "\\n{3,}", with: "\n\n")
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+    static func applyingSubstitutions(_ substitutions: [String: String], to transcript: String) -> String {
+        var text = transcript
+        for phrase in substitutions.keys.sorted(by: { $0.count > $1.count }) {
+            guard let replacement = substitutions[phrase] else { continue }
+            let template = NSRegularExpression.escapedTemplate(for: replacement)
+            text = replacingMatches(in: text, pattern: substitutionPattern(phrase), with: template)
+        }
+        return text
+    }
+
     static func applyingAutomaticPunctuation(candidate: String, to original: String) -> String {
         let source = original.trimmingCharacters(in: .whitespacesAndNewlines)
         let proposed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -107,22 +117,65 @@ enum SpokenDictationFormatter {
             }
         }
 
-        var accepted = proposed
-        for (sourceWord, proposedWord) in zip(sourceWords, proposedWords).reversed()
-            where sourceWord.text.rangeOfCharacter(from: .uppercaseLetters) != nil {
-            guard let range = Range(proposedWord.range, in: accepted) else {
-                return enforcingLikelyQuestionTerminal(in: source)
-            }
-            accepted.replaceSubrange(range, with: sourceWord.text)
-        }
-        accepted = restoringSourceFormatting(
+        var accepted = restoringSourceFormatting(
             from: source,
-            in: accepted,
+            in: proposed,
             sourceWords: sourceWords,
             candidateWords: proposedWords
         )
+        let acceptedWords = wordMatches(in: accepted)
+        guard acceptedWords.count == sourceWords.count else {
+            return enforcingLikelyQuestionTerminal(in: source)
+        }
+        for (index, pair) in zip(sourceWords, acceptedWords).enumerated().reversed()
+            where pair.0.text != pair.1.text {
+            let sourceWord = pair.0
+            let acceptedWord = pair.1
+            let sourceIsLowercase = sourceWord.text.rangeOfCharacter(from: .uppercaseLetters) == nil
+            if sourceIsLowercase && isSentenceStart(wordIndex: index, words: acceptedWords, in: accepted) {
+                continue
+            }
+            guard let range = Range(acceptedWord.range, in: accepted) else {
+                return enforcingLikelyQuestionTerminal(in: source)
+            }
+            if sourceWord.text.lowercased() == "i" {
+                accepted.replaceSubrange(range, with: "I")
+            } else {
+                accepted.replaceSubrange(range, with: sourceWord.text)
+            }
+        }
         return enforcingLikelyQuestionTerminal(in: accepted)
     }
+
+    private static let singleWordSentenceAllowlist: Set<String> = [
+        "yes", "no", "yeah", "nope", "ok", "okay", "sure", "right", "correct",
+        "exactly", "absolutely", "definitely", "maybe", "perhaps", "thanks",
+        "interesting", "agreed", "done", "go", "stop", "wait", "listen",
+        "look", "see", "now", "then", "too", "one", "two", "three", "four",
+        "five", "six", "seven", "eight", "nine", "ten", "first", "second",
+        "third", "fourth", "fifth", "next", "finally", "lastly",
+    ]
+
+    private static let discourseMarkersBeforeComma: Set<String> = [
+        "yes", "no", "yeah", "nope", "ok", "okay", "well", "now", "so",
+        "right", "sure", "maybe", "perhaps", "however", "therefore", "actually",
+        "basically", "literally", "honestly", "frankly", "instead", "otherwise",
+        "meanwhile", "finally", "first", "second", "third", "lastly", "plus",
+        "also", "too", "unfortunately", "luckily", "sadly", "clearly",
+        "obviously", "interestingly", "importantly", "anyway", "anyways",
+        "alright", "listen", "look",
+    ]
+
+    private static let clauseBoundaryAfterComma: Set<String> = [
+        "if", "whether", "who", "whose", "whom", "which", "that", "because",
+        "although", "though", "since", "while", "when", "whenever", "where",
+        "wherever", "unless", "until", "before", "after", "as", "but", "and",
+        "or", "nor", "yet", "so", "then", "however", "therefore", "meanwhile",
+        "otherwise", "instead", "also", "plus",
+    ]
+
+    private static let sentenceTerminators = CharacterSet(charactersIn: ".!?…\n")
+    private static let gapSkippables = CharacterSet(charactersIn: " \t\r\n“”\"'()[]{}")
 
     private static func restoringSourceFormatting(
         from source: String,
@@ -166,14 +219,26 @@ enum SpokenDictationFormatter {
                 }
 
                 let newlineCount = sourceGap.filter { $0 == "\n" }.count
-                guard newlineCount > 0 else { continue }
-                var candidateGap = result.substring(with: candidateGapRange)
-                while let last = candidateGap.last,
-                      last == " " || last == "\t" || last == "\r" || last == "\n" {
-                    candidateGap.removeLast()
+                if newlineCount > 0 {
+                    var candidateGap = result.substring(with: candidateGapRange)
+                    while let last = candidateGap.last,
+                          last == " " || last == "\t" || last == "\r" || last == "\n" {
+                        candidateGap.removeLast()
+                    }
+                    candidateGap += newlineCount > 1 ? "\n\n" : "\n"
+                    result.replaceCharacters(in: candidateGapRange, with: candidateGap)
+                    continue
                 }
-                candidateGap += newlineCount > 1 ? "\n\n" : "\n"
-                result.replaceCharacters(in: candidateGapRange, with: candidateGap)
+
+                if let sanitized = sanitizedCandidateGap(
+                    result,
+                    gapRange: candidateGapRange,
+                    previousIndex: index,
+                    nextIndex: index + 1,
+                    words: candidateWords
+                ) {
+                    result.replaceCharacters(in: candidateGapRange, with: sanitized)
+                }
             }
         }
 
@@ -185,6 +250,122 @@ enum SpokenDictationFormatter {
         }
 
         return result as String
+    }
+
+    private static func sanitizedCandidateGap(
+        _ candidate: NSMutableString,
+        gapRange: NSRange,
+        previousIndex: Int,
+        nextIndex: Int,
+        words: [(text: String, range: NSRange)]
+    ) -> String? {
+        let gap = candidate.substring(with: gapRange)
+        let trimmed = gap.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+
+        if trimmed.range(of: "[.!?…]", options: .regularExpression) != nil {
+            if trimmed.hasPrefix("."),
+               !trimmed.contains("!"), !trimmed.contains("?"), !trimmed.contains("…"),
+               isOneWordSentenceEnding(at: previousIndex, words: words, in: candidate),
+               !keepsSingleWordSentence(words[previousIndex].text) {
+                return " "
+            }
+            return nil
+        }
+
+        if trimmed.contains(",") {
+            if keepsModelComma(
+                previousText: words[previousIndex].text,
+                nextIndex: nextIndex,
+                words: words,
+                in: candidate
+            ) {
+                return nil
+            }
+            return " "
+        }
+
+        return nil
+    }
+
+    private static func keepsSingleWordSentence(_ previousText: String) -> Bool {
+        singleWordSentenceAllowlist.contains(previousText.lowercased())
+    }
+
+    private static func isOneWordSentenceEnding(
+        at wordIndex: Int,
+        words: [(text: String, range: NSRange)],
+        in candidate: NSMutableString
+    ) -> Bool {
+        if wordIndex == 0 { return true }
+        let gapRange = NSRange(
+            location: NSMaxRange(words[wordIndex - 1].range),
+            length: words[wordIndex].range.location - NSMaxRange(words[wordIndex - 1].range)
+        )
+        let gap = candidate.substring(with: gapRange)
+        return gap.range(of: "[.!?…\\n]", options: .regularExpression) != nil
+    }
+
+    private static func keepsModelComma(
+        previousText: String,
+        nextIndex: Int,
+        words: [(text: String, range: NSRange)],
+        in candidate: NSMutableString
+    ) -> Bool {
+        if discourseMarkersBeforeComma.contains(previousText.lowercased()) {
+            return true
+        }
+        let nextText = words[nextIndex].text.lowercased()
+        if clauseBoundaryAfterComma.contains(nextText) {
+            return true
+        }
+        return isEnumerationComma(wordRange: words[nextIndex].range, in: candidate)
+    }
+
+    private static func isEnumerationComma(
+        wordRange: NSRange,
+        in candidate: NSMutableString
+    ) -> Bool {
+        var start = wordRange.location
+        while start > 0 {
+            let scalar = candidate.character(at: start - 1)
+            if sentenceTerminators.contains(UnicodeScalar(scalar)!) { break }
+            start -= 1
+        }
+        var end = NSMaxRange(wordRange)
+        while end < candidate.length {
+            let scalar = candidate.character(at: end)
+            if sentenceTerminators.contains(UnicodeScalar(scalar)!) { break }
+            end += 1
+        }
+        guard end > start else { return false }
+        let sentence = candidate.substring(with: NSRange(location: start, length: end - start))
+        return sentence.range(of: ",\\s+(?:and|or)\\b", options: .regularExpression) != nil
+    }
+
+    private static func isSentenceStart(
+        wordIndex: Int,
+        words: [(text: String, range: NSRange)],
+        in text: String
+    ) -> Bool {
+        if wordIndex == 0 { return true }
+        let nsText = text as NSString
+        var location = words[wordIndex].range.location
+        while location > 0 {
+            let scalar = nsText.character(at: location - 1)
+            guard let unicode = UnicodeScalar(scalar) else { return false }
+            if sentenceTerminators.contains(unicode) { return true }
+            if gapSkippables.contains(unicode) {
+                location -= 1
+                continue
+            }
+            return false
+        }
+        return true
+    }
+
+    private static func substitutionPattern(_ phrase: String) -> String {
+        "(?i)(?<![\\p{L}\\p{N}])\(escapedPhrase(phrase))(?![\\p{L}\\p{N}])"
     }
 
     private static func containsPunctuation(_ text: String) -> Bool {

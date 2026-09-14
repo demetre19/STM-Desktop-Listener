@@ -14,7 +14,7 @@ It began as a companion app for SEO Time Machines, then grew into an independent
 
 ### Capture, mark up, and move on
 
-Take a region screenshot and open it instantly in the native editor. Add arrows, text, numbers, blur, crops, and export-ready finishing touches without breaking your flow or opening a browser tab.
+Take a region screenshot and open it instantly in the native editor. Add arrows, text, numbers, blur, crops, and export-ready finishing touches without breaking your flow or opening a browser tab. Need the same region again? **Repeat Last Screenshot** recaptures the exact coordinates of your previous capture with one shortcut — no redrawing.
 
 ### Pull text out of anything on screen
 
@@ -207,6 +207,12 @@ Do **not** generate a replacement token on one computer, overwrite the main `AUT
 Open **Settings > Voice AI** to choose cloud or local transcription and configure safe spoken shortcuts.
 Every dictation uses the bundled local Edge-Punct-Casing model after speech recognition. STM accepts its punctuation and capitalization only when the case-insensitive sequence of every letter and number token is unchanged. A candidate that adds, removes, changes, or reorders words is rejected; existing acronyms and mixed-case names keep their original casing. The transcript is never sent to a general chat model.
 
+### Word substitutions and guarded punctuation
+
+Open **Settings > Voice AI** (or the **Word Substitutions** button on the popover's Dictation card) to teach STM your vocabulary. Add one `heard phrase = replacement` pair per line — for example `all eyes = Demetre` — and every dictation applies them before punctuation. Matching is case-insensitive, whole-phrase, longest-first, and the replacement text is inserted verbatim.
+
+The guarded punctuation pass now also repairs common model noise: mid-sentence capitals the model invents are reverted, stray commas that do not sit at a clause boundary are dropped, and bogus one-word sentence splits are merged — while real sentence starts, enumerations, and explicit spoken punctuation are preserved.
+
 
 ### Local Qwen3-ASR backup
 
@@ -266,6 +272,8 @@ Each feature row has:
 - Clear: disables that feature's global hotkey.
 - Default: restores the desktop listener default.
 - Chrome Default: applies the known Chrome extension default where one exists.
+
+Repeat Last Screenshot defaults to `Cmd+Shift+5` and reuses the exact region of the most recent successful screenshot. If macOS's built-in screenshot shortcut intercepts that combination, record a different one on the feature row.
 
 Normal Voice Dictation may use the plain `Home` key. Other recorded shortcuts, including Voice Dictation (Alternate), must include Command or Control so they remain compatible with macOS global hotkey registration.
 

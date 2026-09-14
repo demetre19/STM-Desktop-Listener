@@ -45,6 +45,80 @@ struct SpokenDictationFormatterTests {
                 "Please email the report.",
                 "Please send the report."
             ),
+            (
+                "model-added mid-sentence capitals are reverted",
+                "i don't want to open another YouTube panel",
+                "I. Don't want to open another, YouTube, panel.",
+                "I don't want to open another YouTube panel."
+            ),
+            (
+                "model-added comma mid-clause is dropped",
+                "i want it inside the one that already exists",
+                "I want it, inside the one that already exists.",
+                "I want it inside the one that already exists."
+            ),
+            (
+                "model-added comma before subordinator is kept",
+                "tell me when it is done",
+                "Tell me, when it is done.",
+                "Tell me, when it is done."
+            ),
+            (
+                "enumeration commas are kept",
+                "i need apples oranges and pears",
+                "I need apples, oranges, and pears.",
+                "I need apples, oranges, and pears."
+            ),
+            (
+                "discourse marker comma is kept",
+                "yes i agree with that",
+                "Yes, I agree with that.",
+                "Yes, I agree with that."
+            ),
+            (
+                "one-word sentence allowlist keeps period",
+                "yes that is right",
+                "Yes. That is right.",
+                "Yes. That is right."
+            ),
+            (
+                "question words still get question mark",
+                "can you do an audit on the voice processing part",
+                "Can, You do an audit on the, voice, processing part.",
+                "Can you do an audit on the voice processing part?"
+            ),
+        ]
+        let substitutionCases: [(name: String, substitutions: [String: String], input: String, expected: String)] = [
+            (
+                "misheard name is replaced",
+                ["all eyes": "Demetre"],
+                "it always substitutes my name all eyes with something else",
+                "it always substitutes my name Demetre with something else"
+            ),
+            (
+                "substitution is case insensitive",
+                ["all eyes": "Demetre"],
+                "my name All Eyes is wrong",
+                "my name Demetre is wrong"
+            ),
+            (
+                "substitution respects word boundaries",
+                ["all": "every"],
+                "all of the allies are here",
+                "every of the allies are here"
+            ),
+            (
+                "longest phrase wins",
+                ["eyes": "Eyes", "all eyes": "Demetre"],
+                "all eyes on me",
+                "Demetre on me"
+            ),
+            (
+                "empty substitutions leave text unchanged",
+                [:],
+                "nothing changes here",
+                "nothing changes here"
+            ),
         ]
         let pipelineCases: [(name: String, input: String, candidate: String, expected: String)] = [
             (
@@ -72,6 +146,21 @@ struct SpokenDictationFormatterTests {
                 "This is some content,\nNow this is more."
             ),
         ]
+
+        for testCase in substitutionCases {
+            let actual = SpokenDictationFormatter.applyingSubstitutions(
+                testCase.substitutions,
+                to: testCase.input
+            )
+            guard actual == testCase.expected else {
+                print(
+                    "FAIL: \(testCase.name)\n" +
+                        "  expected: \(String(reflecting: testCase.expected))\n" +
+                        "  actual:   \(String(reflecting: actual))"
+                )
+                exit(EXIT_FAILURE)
+            }
+        }
 
         for testCase in cases {
             let actual = SpokenDictationFormatter.apply(to: testCase.input)
@@ -116,6 +205,6 @@ struct SpokenDictationFormatterTests {
             }
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count) cases passed")
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count) cases passed")
     }
 }

@@ -607,7 +607,11 @@ final class DictationController {
             return
         }
         let formattedText = SpokenDictationFormatter.apply(to: text)
-        let punctuatedText = LocalPunctuationService.apply(to: formattedText)
+        let substitutedText = SpokenDictationFormatter.applyingSubstitutions(
+            ConfigStore.stringDictionary("dictation.wordSubstitutions"),
+            to: formattedText
+        )
+        let punctuatedText = LocalPunctuationService.apply(to: substitutedText)
         completeDictation(with: punctuatedText, polished: false)
     }
 

@@ -23,6 +23,7 @@ final class FeatureRunner {
     var onError: ((String, String) -> Void)?
     var onNotice: ((String, String) -> Void)?
     private var screenshotInFlight = false
+    private var lastScreenshotRect: CGRect?
     private var screenshotEditor: ScreenshotEditorWindowController?
 
     var captureOverlayActive: Bool {
@@ -63,6 +64,7 @@ final class FeatureRunner {
 
         switch feature {
         case .screenshot: runScreenshot()
+        case .screenshotRepeat: runScreenshotRepeat()
         case .ocr: runOCR()
         case .dictation: dictation.toggle()
         case .dictationPolish: dictation.toggle()
@@ -137,6 +139,28 @@ final class FeatureRunner {
         }
     }
 
+    private func runScreenshotRepeat() {
+        if selection.isActive {
+            Logger.log("screenshot repeat ignored because selection is already active")
+            return
+        }
+        guard !screenshotInFlight else {
+            Logger.log("screenshot repeat ignored because capture is already active")
+            return
+        }
+        guard let rect = lastScreenshotRect else {
+            onNotice?("No previous screenshot", "Capture a region once, then use this shortcut to repeat it.")
+            return
+        }
+        guard PermissionCenter.hasScreenAccess() else {
+            onNotice?("Screen permission needed", "Grant Screen Recording permission, then try again.")
+            return
+        }
+        screenshotInFlight = true
+        Logger.log("screenshot repeat capturing rect=\(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))x\(Int(rect.height))")
+        captureScreenshot(rect: rect, clearMeasurementAfter: false)
+    }
+
     private func captureScreenshot(
         rect: CGRect,
         frozenSnapshots: [ScreenSnapshot]? = nil,
@@ -153,6 +177,7 @@ final class FeatureRunner {
                 }
                 let captureMs = Int(Date().timeIntervalSince(started) * 1000)
                 DispatchQueue.main.async {
+                    self.lastScreenshotRect = rect
                     Logger.log("screenshot native editor open pixels=\(image.width)x\(image.height) frozen=\(frozenSnapshots != nil) measurement=\(clearMeasurementAfter) captureMs=\(captureMs)")
                     self.openScreenshotEditor(image: image) {
                         self.selection.dismissHeldOverlay()

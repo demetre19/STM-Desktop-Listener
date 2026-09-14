@@ -25,6 +25,11 @@ private final class SettingsWindow: NSWindow {
         if let field = view as? CommandTextField, field.currentEditor() === editor {
             return true
         }
+        if let textView = view as? NSTextView,
+           textView.identifier?.rawValue == "dictationSubstitutionsEditor",
+           textView === editor {
+            return true
+        }
         return view.subviews.contains { containsCommandEditor(editor, in: $0) }
     }
 }
@@ -208,6 +213,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var commandShortcutFields: [String: NSTextField] = [:]
     private var transcriptionEnginePopup: NSPopUpButton?
     private var voiceCommandsCheck: NSButton?
+    private var substitutionsTextView: NSTextView?
     private var qwenStatusLabel: NSTextField?
     private var qwenDownloadButton: STMActionButton?
     private var qwenProgressIndicator: NSProgressIndicator?
@@ -484,6 +490,54 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         voiceCommands.state = localConfig.voiceCommandsEnabled ? .on : .off
         voiceCommandsCheck = voiceCommands
         stack.addArrangedSubview(polishFieldRow("Voice commands", control: voiceCommands))
+
+        let substitutionsEditor = NSTextView()
+        substitutionsEditor.identifier = NSUserInterfaceItemIdentifier("dictationSubstitutionsEditor")
+        substitutionsEditor.isRichText = false
+        substitutionsEditor.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        substitutionsEditor.textColor = SettingsPalette.text
+        substitutionsEditor.backgroundColor = SettingsPalette.badge
+        substitutionsEditor.insertionPointColor = SettingsPalette.cyan
+        substitutionsEditor.isAutomaticQuoteSubstitutionEnabled = false
+        substitutionsEditor.isAutomaticDashSubstitutionEnabled = false
+        substitutionsEditor.isAutomaticTextReplacementEnabled = false
+        substitutionsEditor.isAutomaticSpellingCorrectionEnabled = false
+        substitutionsEditor.textContainerInset = NSSize(width: 6, height: 6)
+        substitutionsEditor.string = Self.serializedSubstitutions(
+            ConfigStore.stringDictionary("dictation.wordSubstitutions")
+        )
+        substitutionsTextView = substitutionsEditor
+
+        let substitutionsScroll = NSScrollView()
+        substitutionsScroll.documentView = substitutionsEditor
+        substitutionsScroll.hasVerticalScroller = true
+        substitutionsScroll.borderType = .noBorder
+        substitutionsScroll.drawsBackground = false
+        substitutionsScroll.translatesAutoresizingMaskIntoConstraints = false
+        substitutionsScroll.widthAnchor.constraint(equalToConstant: 580).isActive = true
+        substitutionsScroll.heightAnchor.constraint(equalToConstant: 110).isActive = true
+
+        let substitutionsPanel = RoundedPanelView(
+            fillColor: SettingsPalette.badge,
+            strokeColor: SettingsPalette.badgeStroke,
+            radius: 8
+        )
+        substitutionsPanel.addSubview(substitutionsScroll)
+        NSLayoutConstraint.activate([
+            substitutionsScroll.leadingAnchor.constraint(equalTo: substitutionsPanel.leadingAnchor, constant: 4),
+            substitutionsScroll.trailingAnchor.constraint(equalTo: substitutionsPanel.trailingAnchor, constant: -4),
+            substitutionsScroll.topAnchor.constraint(equalTo: substitutionsPanel.topAnchor, constant: 4),
+            substitutionsScroll.bottomAnchor.constraint(equalTo: substitutionsPanel.bottomAnchor, constant: -4),
+        ])
+        stack.addArrangedSubview(polishFieldRow("Word substitutions", control: substitutionsPanel))
+
+        let substitutionsHint = label(
+            "One per line: heard phrase = replacement. Example: all eyes = Demetre. Applied to every dictation before punctuation.",
+            font: .systemFont(ofSize: 11)
+        )
+        substitutionsHint.textColor = SettingsPalette.muted
+        substitutionsHint.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        stack.addArrangedSubview(substitutionsHint)
 
         let attribution = label(
             "Cloudflare remains preferred. Qwen3-ASR 0.6B downloads only when requested, runs locally through a private MLX runtime, and is Apache-2.0.",
@@ -769,6 +823,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private func description(for feature: FeatureID) -> String {
         switch feature {
         case .screenshot: return "Captures a desktop region and opens the native editor instantly."
+        case .screenshotRepeat: return "Captures the exact region of the previous screenshot without drawing it again."
         case .ocr: return "Captures a region, extracts text locally, then copies it."
         case .dictation: return "Transcribes with the selected engine, then formats spoken commands and punctuation."
         case .dictationPolish: return "Uses the same exact-word dictation pipeline with an alternate shortcut."
@@ -859,6 +914,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         field.layer?.cornerRadius = 7
         field.layer?.backgroundColor = SettingsPalette.badge.cgColor
         field.layer?.borderWidth = 1
+
         field.layer?.borderColor = SettingsPalette.badgeStroke.cgColor
         field.widthAnchor.constraint(equalToConstant: 420).isActive = true
         field.heightAnchor.constraint(equalToConstant: 30).isActive = true
@@ -907,6 +963,27 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             return .worker
         }
         return DictationTranscriptionEngine(rawValue: raw) ?? .worker
+    }
+
+    private static func serializedSubstitutions(_ substitutions: [String: String]) -> String {
+        substitutions
+            .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+            .map { "\($0.key) = \($0.value)" }
+            .joined(separator: "\n")
+    }
+
+    private static func parsedSubstitutions(from text: String) -> [String: String] {
+        var result: [String: String] = [:]
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
+            guard let separator = trimmed.range(of: "=") else { continue }
+            let heard = trimmed[..<separator.lowerBound].trimmingCharacters(in: .whitespaces)
+            let replacement = trimmed[separator.upperBound...].trimmingCharacters(in: .whitespaces)
+            guard !heard.isEmpty, !replacement.isEmpty else { continue }
+            result[heard] = replacement
+        }
+        return result
     }
 
 
@@ -1199,6 +1276,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 voiceCommandsEnabled: voiceCommandsCheck?.state == .on
             )
             try localConfig.save()
+
+            let substitutions = Self.parsedSubstitutions(from: substitutionsTextView?.string ?? "")
+            try ConfigStore.set(substitutions, for: "dictation.wordSubstitutions")
 
             onSettingsChanged()
             rebuildContentView()
