@@ -17,10 +17,12 @@ struct DictationLocalConfiguration {
     static let engineKey = "dictation.transcriptionEngine"
     static let modelPathKey = "dictation.qwenModelPath"
     static let voiceCommandsKey = "dictation.voiceCommandsEnabled"
+    static let englishOnlyKey = "dictation.englishOnly"
 
     let engine: DictationTranscriptionEngine
     let modelPath: String
     let voiceCommandsEnabled: Bool
+    let englishOnly: Bool
 
     static func load() -> DictationLocalConfiguration {
         let storedEngine = ConfigStore.string(engineKey) ?? DictationTranscriptionEngine.worker.rawValue
@@ -31,7 +33,8 @@ struct DictationLocalConfiguration {
         return DictationLocalConfiguration(
             engine: engine,
             modelPath: ConfigStore.string(modelPathKey) ?? "",
-            voiceCommandsEnabled: ConfigStore.bool(voiceCommandsKey, default: false)
+            voiceCommandsEnabled: ConfigStore.bool(voiceCommandsKey, default: false),
+            englishOnly: ConfigStore.bool(englishOnlyKey, default: true)
         )
     }
 
@@ -39,6 +42,7 @@ struct DictationLocalConfiguration {
         try ConfigStore.set(engine.rawValue, for: Self.engineKey)
         try ConfigStore.set(modelPath, for: Self.modelPathKey)
         try ConfigStore.set(voiceCommandsEnabled, for: Self.voiceCommandsKey)
+        try ConfigStore.set(englishOnly, for: Self.englishOnlyKey)
     }
 }
 

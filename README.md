@@ -226,6 +226,7 @@ The guarded punctuation pass now also repairs common model noise: mid-sentence c
 - Installation is application-scoped: leaving Voice AI settings or closing the window does not cancel it. Repeated clicks reuse the one active task, the determinate progress bar follows that shared task, and a native notification reports completion or failure.
 - Qwen's own punctuation flows through STM's existing spoken-punctuation and guarded Edge-Punct-Casing passes. The postprocessor accepts punctuation/capitalization only when the recognized word sequence is unchanged.
 - Optional spoken commands accept only `command <saved shortcut title>` or `run command <saved shortcut title>`. Matching is exact after case and punctuation normalization; dictated shell text is never executed.
+- **English output only (local model)** is on by default and pins Qwen3-ASR to English so a short or ambiguous utterance cannot be auto-detected as another language. Turn it off under **Output language** to dictate in any of the model's other supported languages.
 
 The local model is `mlx-community/Qwen3-ASR-0.6B-8bit` at pinned revision `89e96d92ba34aca20b3e29fb10cc284097d1219f`, derived from Apache-2.0 `Qwen/Qwen3-ASR-0.6B`. Runtime dependencies are hash-locked around MIT-licensed `mlx-audio` 0.5.3 and installed with the bundled, SHA-256-pinned `uv` 0.8.5 binary. Runtime and model notices are included in the app bundle or installed model folder. The bundled Edge-Punct-Casing model's source URL and verified hashes remain recorded in `Resources/PunctuationModel/MODEL_METADATA.txt`.
 

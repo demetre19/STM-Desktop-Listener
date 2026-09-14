@@ -67,7 +67,8 @@ enum DiagnosticsCommand {
                 "transcriptionEngine": DictationLocalConfiguration.load().engine.rawValue,
                 "qwenStatus": QwenModelManager.statusText(),
                 "qwenRuntimeInstalled": QwenRuntimeManager.isInstalled,
-                "voiceCommandsEnabled": DictationLocalConfiguration.load().voiceCommandsEnabled
+                "voiceCommandsEnabled": DictationLocalConfiguration.load().voiceCommandsEnabled,
+                "englishOnly": DictationLocalConfiguration.load().englishOnly
             ] as [String: Any],
             "features": FeatureID.allCases.map { feature -> [String: Any] in
                 [

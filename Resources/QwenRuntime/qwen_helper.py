@@ -97,6 +97,9 @@ def main():
             wav_path = validated_wav_path(request.get("path"))
             duration_seconds = wav_duration_seconds(wav_path)
             max_tokens = min(1024, max(24, int(duration_seconds * 6) + 16))
+            language = request.get("language")
+            if not isinstance(language, str) or not language.strip():
+                language = None
             output_stem = os.path.join(tempfile.gettempdir(), "stm-qwen-" + uuid.uuid4().hex)
             output_path = output_stem + ".txt"
             try:
@@ -108,6 +111,7 @@ def main():
                         format="txt",
                         verbose=False,
                         max_tokens=max_tokens,
+                        language=language,
                     )
                 text = result.text.strip()
             finally:

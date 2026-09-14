@@ -213,6 +213,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var commandShortcutFields: [String: NSTextField] = [:]
     private var transcriptionEnginePopup: NSPopUpButton?
     private var voiceCommandsCheck: NSButton?
+    private var englishOnlyCheck: NSButton?
     private var substitutionsTextView: NSTextView?
     private var qwenStatusLabel: NSTextField?
     private var qwenDownloadButton: STMActionButton?
@@ -491,7 +492,24 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         voiceCommandsCheck = voiceCommands
         stack.addArrangedSubview(polishFieldRow("Voice commands", control: voiceCommands))
 
-        let substitutionsEditor = NSTextView()
+        let englishOnly = NSButton(
+            checkboxWithTitle: "English output only (local model)",
+            target: nil,
+            action: nil
+        )
+        englishOnly.state = localConfig.englishOnly ? .on : .off
+        englishOnlyCheck = englishOnly
+        stack.addArrangedSubview(polishFieldRow("Output language", control: englishOnly))
+
+        let englishOnlyHint = label(
+            "Pins Qwen3-ASR to English so short or ambiguous words cannot be auto-detected as another language. Turn off to dictate in other supported languages.",
+            font: .systemFont(ofSize: 11)
+        )
+        englishOnlyHint.textColor = SettingsPalette.muted
+        englishOnlyHint.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        stack.addArrangedSubview(englishOnlyHint)
+
+        let substitutionsEditor = NSTextView(frame: NSRect(x: 0, y: 0, width: 572, height: 102))
         substitutionsEditor.identifier = NSUserInterfaceItemIdentifier("dictationSubstitutionsEditor")
         substitutionsEditor.isRichText = false
         substitutionsEditor.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -503,6 +521,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         substitutionsEditor.isAutomaticTextReplacementEnabled = false
         substitutionsEditor.isAutomaticSpellingCorrectionEnabled = false
         substitutionsEditor.textContainerInset = NSSize(width: 6, height: 6)
+        substitutionsEditor.isVerticallyResizable = true
+        substitutionsEditor.isHorizontallyResizable = false
+        substitutionsEditor.autoresizingMask = [.width]
+        substitutionsEditor.minSize = NSSize(width: 0, height: 102)
+        substitutionsEditor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        substitutionsEditor.textContainer?.widthTracksTextView = true
+        substitutionsEditor.textContainer?.containerSize = NSSize(width: 572, height: CGFloat.greatestFiniteMagnitude)
         substitutionsEditor.string = Self.serializedSubstitutions(
             ConfigStore.stringDictionary("dictation.wordSubstitutions")
         )
@@ -1273,7 +1298,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             let localConfig = DictationLocalConfiguration(
                 engine: transcriptionEngine,
                 modelPath: existingLocalConfig.modelPath,
-                voiceCommandsEnabled: voiceCommandsCheck?.state == .on
+                voiceCommandsEnabled: voiceCommandsCheck?.state == .on,
+                englishOnly: englishOnlyCheck?.state != .off
             )
             try localConfig.save()
 

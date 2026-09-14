@@ -368,11 +368,15 @@ private final class QwenRuntimeProcess {
     }
 
     private func requestTranscriptionLocked(waveURL: URL) throws -> String {
-        let response = try sendRequestLocked([
+        var request: [String: Any] = [
             "id": nextRequestIdentifierLocked(),
             "op": "transcribe",
             "path": waveURL.path,
-        ])
+        ]
+        if DictationLocalConfiguration.load().englishOnly {
+            request["language"] = "English"
+        }
+        let response = try sendRequestLocked(request)
         guard response["ok"] as? Bool == true else {
             throw SimpleError(response["error"] as? String ?? "Qwen3-ASR transcription failed.")
         }
