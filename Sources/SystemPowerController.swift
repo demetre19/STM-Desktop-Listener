@@ -145,7 +145,7 @@ enum SystemPowerController {
         Logger.log("power scheduled action=\(action.rawValue) target=\(format(target))")
         return SystemPowerStatus(
             title: "Scheduled \(action.label)",
-            details: "\(action.label.capitalized) scheduled for \(format(target)).\n\nVisible status is now in the Power menu and Power Status. Shutdown will auto-commit dirty git repos discovered from open cmux/OMP sessions before it runs."
+            details: "\(action.label.capitalized) scheduled for \(format(target)).\n\nVisible status is now in the Power menu and Power Status. Shutdown will auto-commit dirty git repos discovered from open herdr/OMP sessions before it runs."
         )
     }
 
@@ -190,7 +190,7 @@ enum SystemPowerController {
         let lines = menuStatusLines() + [
             "",
             "Scheduled shutdown auto-save:",
-            "• Stages and commits dirty git repos discovered from open cmux/OMP sessions.",
+            "• Stages and commits dirty git repos discovered from open herdr/OMP sessions.",
             "• Skips repos in merge/rebase/cherry-pick/revert states.",
             "• Does not push and cannot save unsaved editor buffers.",
             "",
@@ -243,7 +243,7 @@ enum SystemPowerController {
         notifyWithAppleScript(title: "STM Power", body: "Starting scheduled \(action.label).")
         if action == .shutdown {
             let autosave = autosaveOpenSessionRepos()
-            let summary = autosave.isEmpty ? "No dirty cmux/OMP git repos found." : autosave.joined(separator: " ")
+            let summary = autosave.isEmpty ? "No dirty herdr/OMP git repos found." : autosave.joined(separator: " ")
             Logger.log("power runner autosave summary=\(summary)")
             notifyWithAppleScript(title: "STM Power", body: "Git autosave complete. \(summary)")
         }
@@ -435,7 +435,7 @@ enum SystemPowerController {
         var sessionPids = Set<Int>()
         var stack = rows.filter { row in
             let haystack = "\(row.command) \(row.arguments)".lowercased()
-            return haystack.contains("cmux") || haystack.contains("omp")
+            return haystack.contains("herdr") || haystack.contains("omp")
         }.map(\.pid)
         while let pid = stack.popLast() {
             guard !sessionPids.contains(pid) else { continue }

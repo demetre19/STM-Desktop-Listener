@@ -52,7 +52,7 @@ Move Finder-selected or clipboard images into your existing browser optimiser wi
 
 ### Control power without watching the clock
 
-Schedule shutdown or sleep, keep the Mac awake for a task, and see the current state at a glance. Before a scheduled shutdown, STM can save dirty Git repositories discovered from open cmux or OMP sessions.
+Schedule shutdown or sleep, keep the Mac awake for a task, and see the current state at a glance. Before a scheduled shutdown, STM can save dirty Git repositories discovered from open herdr or OMP sessions.
 
 ![Schedule sleep, shutdown, and keep-awake time](Images/power-controls.jpg)
 
@@ -305,11 +305,11 @@ Open the menu bar item, then choose **Power**. The Power menu title shows the cu
 - **Schedule Shut Down...** accepts typed inputs like `8am`, `23:30`, `2.5h`, or `30m`.
 - **Schedule Sleep...** uses the same time input.
 - **Keep Awake...** uses macOS `caffeinate` to prevent display, idle, system, and user inactivity sleep until the duration expires.
-- **Run Git Autosave Now** commits dirty git repos discovered from open cmux/OMP session process trees.
+- **Run Git Autosave Now** commits dirty git repos discovered from open herdr/OMP session process trees.
 - **Cancel Scheduled Power Action** removes this app's scheduled shut down/sleep LaunchAgent.
 - **Stop Keep Awake** stops this app's keep-awake LaunchAgent.
 
-Scheduled shutdown runs inside this app with `--power-runner shutdown`. Before shutting down, it stages and commits dirty git repos it can discover from open cmux/OMP session process trees. It skips repos in merge, rebase, cherry-pick, or revert states. It does not push, and it cannot save unsaved editor buffers, browser tabs, or non-git work.
+Scheduled shutdown runs inside this app with `--power-runner shutdown`. Before shutting down, it stages and commits dirty git repos it can discover from open herdr/OMP session process trees. It skips repos in merge, rebase, cherry-pick, or revert states. It does not push, and it cannot save unsaved editor buffers, browser tabs, or non-git work.
 
 Successful menu actions also post macOS notifications when notifications are allowed for STM Desktop Listener.
 
