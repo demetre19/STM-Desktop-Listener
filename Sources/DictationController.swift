@@ -84,7 +84,11 @@ final class DictationController {
         if audioEngine != nil {
             stopAndTranscribe()
         } else if isBusy {
-            cancelTranscription()
+            // A stopped session is still uploading/transcribing. A quick
+            // re-trigger must not cancel it or start a new recording on top
+            // of the in-flight pipeline, so ignore the press entirely.
+            Logger.log("dictation toggle ignored: transcription in progress")
+            NSSound.beep()
         } else {
             startRecording()
         }
