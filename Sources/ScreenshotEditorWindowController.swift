@@ -1364,11 +1364,14 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
     }
 
     @objc private func copyScreenshot() {
-        guard let image = canvas.renderedImage(), let data = encodedImage(image, forCopy: true) else {
+        guard let image = canvas.renderedImage(), let data = encodedImage(image, format: .png, forCopy: true) else {
             showStatus("Failed to copy screenshot", error: true)
             return
         }
-        let type = ScreenshotImageExporter.pasteboardType(for: effectiveFormat())
+        // Clipboard is always PNG: the export format (JPG/WebP) applies to saved
+        // files only. Clipboard managers (Raycast, etc.) do not index WebP-only
+        // pasteboard items as images.
+        let type = ScreenshotImageExporter.pasteboardType(for: .png)
         let board = NSPasteboard.general
         board.clearContents()
         guard board.setData(data, forType: type) else {
@@ -1380,7 +1383,7 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
     }
 
     @objc private func saveScreenshot() {
-        guard let image = canvas.renderedImage(), let data = encodedImage(image, forCopy: false) else {
+        guard let image = canvas.renderedImage(), let data = encodedImage(image, format: preferences.format, forCopy: false) else {
             showStatus("Failed to save screenshot", error: true)
             return
         }
@@ -1400,11 +1403,11 @@ final class ScreenshotEditorWindowController: NSWindowController, NSWindowDelega
         }
     }
 
-    private func encodedImage(_ original: CGImage, forCopy: Bool) -> Data? {
+    private func encodedImage(_ original: CGImage, format: ScreenshotExportFormat, forCopy: Bool) -> Data? {
         let plan = ScreenshotExportPlan(
             pixelWidth: original.width,
             pixelHeight: original.height,
-            requestedFormat: preferences.format,
+            requestedFormat: format,
             quality: preferences.quality,
             copyShrink: preferences.copyShrink,
             roundedBackdrop: canvas.backdrop.isEnabled && canvas.backdrop.outerRadius > 0
