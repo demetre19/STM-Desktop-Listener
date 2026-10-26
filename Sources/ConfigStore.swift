@@ -114,6 +114,12 @@ enum ConfigStore {
         try write(json)
     }
 
+    static func remove(_ key: String) throws {
+        var json = read()
+        json.removeValue(forKey: key)
+        try write(json)
+    }
+
     static func lastSuccessfulUpdateCheck() -> Date? {
         let timestamp = double(lastSuccessfulUpdateCheckKey, default: .nan)
         guard timestamp.isFinite, timestamp >= 0 else { return nil }

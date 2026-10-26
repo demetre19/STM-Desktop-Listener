@@ -205,13 +205,34 @@ Do **not** generate a replacement token on one computer, overwrite the main `AUT
 ## Voice AI
 
 Open **Settings > Voice AI** to choose cloud or local transcription and configure safe spoken shortcuts.
-Every dictation uses the bundled local Edge-Punct-Casing model after speech recognition. STM accepts its punctuation and capitalization only when the case-insensitive sequence of every letter and number token is unchanged. A candidate that adds, removes, changes, or reorders words is rejected; existing acronyms and mixed-case names keep their original casing. The transcript is never sent to a general chat model.
+Every dictation uses the bundled local Edge-Punct-Casing model after speech recognition. STM adopts its punctuation and capitalization only where the recognized word sequence is unchanged — a tolerant anchor alignment tolerates model retokenization such as splitting contractions, while any unaligned gap falls back to the sanitized source spacing so words are never added, removed, changed, or reordered. Existing acronyms and mixed-case names keep their original casing. The transcript is never sent to a general chat model.
 
 ### Word substitutions and guarded punctuation
 
 Open **Settings > Voice AI** (or the **Word Substitutions** button on the popover's Dictation card) to teach STM your vocabulary. Add one `heard phrase = replacement` pair per line — for example `all eyes = Demetre` — and every dictation applies them before punctuation. Matching is case-insensitive, whole-phrase, longest-first, and the replacement text is inserted verbatim.
 
-The guarded punctuation pass now also repairs common model noise: mid-sentence capitals the model invents are reverted, stray commas that do not sit at a clause boundary are dropped, and bogus one-word sentence splits are merged — while real sentence starts, enumerations, and explicit spoken punctuation are preserved.
+The guarded punctuation pass now also repairs common recognizer and model noise: chunk-boundary punctuation is stripped before chunks are joined, mid-sentence capitals are reverted, stray commas that do not sit at a clause boundary are dropped, bogus sentence splits after continuation words and clipped adverb fragments ("pretty much.", "has a?") are merged back, `?`/`!` on non-question clauses are demoted to periods, and interior periods on question-shaped clauses become question marks — while real sentence starts, enumerations, and explicit spoken punctuation are preserved.
+
+STM also learns silently in the background. Each dictation appends a compact decision record to `punctuation-training.jsonl` inside the app's protected config folder (≤5 MB, rotating), and sentence-level patterns — clause shape, surrounding words, terminator — are distilled into `punctuation-policy.json`. Once a pattern proves itself at high confidence the app merges or keeps it automatically; until then the static grammar heuristics stay in charge. Both files are plain JSON next to `config.json`, so an audit (by you or an LLM) can read, prune, or rewrite them and the policy rebuilds from the ledger. Settings > Voice AI has **Reveal Learning Data** and **Clear Learned Punctuation…** — the clear is warning-gated and permanent. Nothing is displayed, sent anywhere, or asked of you during learning — it only ever affects punctuation, never your words, and never overrides explicit spoken punctuation.
+
+### Managing punctuation learning (for humans and LLMs)
+
+**Nothing to install.** The learner is bundled in the app and starts automatically — there is no package, plugin, service, or model download. Update the app and it is already running; dictating is all it needs.
+
+Everything lives in two plain-text files inside `~/Library/Application Support/STM Desktop Listener/`:
+
+| File | Role |
+|---|---|
+| `punctuation-training.jsonl` | The ledger. One JSON line per dictation: timestamp, engine, source text, accepted text, and every gap decision with its sentence context. Source of truth — ≤5 MB, rotates to a fresh epoch. |
+| `punctuation-policy.json` | Derived stats. Each key is a sentence signature `clauseOpener\|wordBefore\|wordAfter\|terminator\|shape` (`$` = end of clause, `q`/`s` = question/statement shape) mapping to `keep,wrong` counts. Safe to edit or delete. |
+
+Both are mode-0600 and human/LLM-readable. **Never edit `config.json`** — it holds the transcription token.
+
+**Audit workflow:** quit the app, open either file, and read or rewrite keys. To drop a learned pattern, delete its line from `punctuation-policy.json`; to change a verdict, edit the `keep,wrong` counts. Relaunch — the file is reloaded.
+
+**Rebuild from the ledger:** quit the app, delete `punctuation-policy.json`, relaunch. The app replays every ledger decision into fresh sentence-level stats — so an LLM can prune the `punctuation-training.jsonl` ledger (remove noisy or unwanted dictations) and rebuild the policy from exactly the history you keep.
+
+**Full reset:** Settings > Voice AI > **Clear Learned Punctuation…** (warning-gated) deletes both files; or delete them manually while the app is quit. Learning restarts from zero.
 
 
 ### Local Qwen3-ASR backup

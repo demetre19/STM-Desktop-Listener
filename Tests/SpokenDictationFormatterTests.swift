@@ -87,6 +87,78 @@ struct SpokenDictationFormatterTests {
                 "Can, You do an audit on the, voice, processing part.",
                 "Can you do an audit on the voice processing part?"
             ),
+            (
+                "recognizer question mark after a continuation word is merged",
+                "everything has a? in weird places",
+                "Everything has a? In weird places.",
+                "Everything has a in weird places."
+            ),
+            (
+                "recognizer period after a degree adverb fragment is merged",
+                "the punctuation is weird. pretty much. everything is wrong.",
+                "The punctuation is weird. Pretty much. Everything is wrong.",
+                "The punctuation is weird. Pretty much everything is wrong."
+            ),
+            (
+                "model question mark on a statement clause is demoted",
+                "can you look at it and there is a bug",
+                "Can you look at it? And there is a bug.",
+                "Can you look at it? And there is a bug."
+            ),
+            (
+                "recognizer question mark on a statement clause is demoted",
+                "that works? and i will fix it",
+                "That works? And I will fix it.",
+                "That works. And I will fix it."
+            ),
+            (
+                "model mid-clause period promotes to question mark",
+                "and how can we improve it and then fix it",
+                "And how can we improve it. And then fix it.",
+                "And how can we improve it? And then fix it."
+            ),
+            (
+                "recognizer mid-clause comma noise is dropped",
+                "the punctuation s weird and i will fix it",
+                "The punctuation, s weird and I will fix it.",
+                "The punctuation s weird and I will fix it."
+            ),
+            (
+                "recognizer mid-clause comma noise in source gap is dropped",
+                "weird punctuation,s and i will fix it",
+                "Weird punctuation,s and I will fix it.",
+                "Weird punctuation s and I will fix it."
+            ),
+            (
+                "trailing recognizer question mark on a statement is demoted",
+                "everything has a?",
+                "Everything has a?",
+                "Everything has a."
+            ),
+            (
+                "short question keeps its question mark",
+                "can you fix it?",
+                "Can you fix it?",
+                "Can you fix it?"
+            ),
+            (
+                "not much keeps its sentence break",
+                "not much. what else?",
+                "Not much. What else?",
+                "Not much. What else?"
+            ),
+            (
+                "let's see if statement keeps a period",
+                "let's see if this works?",
+                "Let's see if this works?",
+                "Let's see if this works."
+            ),
+            (
+                "can you see if question keeps a question mark",
+                "can you see if it works.",
+                "Can you see if it works.",
+                "Can you see if it works?"
+            ),
         ]
         let substitutionCases: [(name: String, substitutions: [String: String], input: String, expected: String)] = [
             (
@@ -190,7 +262,7 @@ struct SpokenDictationFormatterTests {
         }
 
         for testCase in pipelineCases {
-            let commandFormatted = SpokenDictationFormatter.apply(to: testCase.input)
+            let commandFormatted = SpokenDictationFormatter.applyingSpokenCommands(to: testCase.input)
             let actual = SpokenDictationFormatter.applyingAutomaticPunctuation(
                 candidate: testCase.candidate,
                 to: commandFormatted

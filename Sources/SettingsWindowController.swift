@@ -564,6 +564,27 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         substitutionsHint.widthAnchor.constraint(equalToConstant: 760).isActive = true
         stack.addArrangedSubview(substitutionsHint)
 
+        let learningRow = NSStackView()
+        learningRow.orientation = .horizontal
+        learningRow.spacing = 12
+        let revealLearning = button("Reveal Learning Data", action: #selector(revealPunctuationLearningData))
+        revealLearning.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        let clearLearning = button("Clear Learned Punctuation…", action: #selector(clearPunctuationLearning))
+        clearLearning.destructive = true
+        clearLearning.accentColor = SettingsPalette.red
+        clearLearning.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        learningRow.addArrangedSubview(revealLearning)
+        learningRow.addArrangedSubview(clearLearning)
+        stack.addArrangedSubview(polishFieldRow("Learning", control: learningRow))
+
+        let learningHint = label(
+            "Dictations are logged to a decision ledger and sentence-level patterns are distilled into punctuation-policy.json — both next to config.json. Audits can read or rewrite them directly; clearing deletes the ledger and every learned pattern.",
+            font: .systemFont(ofSize: 11)
+        )
+        learningHint.textColor = SettingsPalette.muted
+        learningHint.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        stack.addArrangedSubview(learningHint)
+
         let attribution = label(
             "Cloudflare remains preferred. Qwen3-ASR 0.6B downloads only when requested, runs locally through a private MLX runtime, and is Apache-2.0.",
             font: .systemFont(ofSize: 11)
@@ -1539,6 +1560,31 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func refreshPermissionsAction() {
         refreshPermissions()
+    }
+
+    @objc private func revealPunctuationLearningData() {
+        PunctuationLearning.Policy.shared.flush()
+        var urls = [
+            PunctuationLearning.Policy.storeURL,
+            PunctuationLearning.trainingLogURL,
+        ].filter { FileManager.default.fileExists(atPath: $0.path) }
+        if urls.isEmpty {
+            urls = [AppPaths.applicationSupport]
+        }
+        NSWorkspace.shared.activateFileViewerSelecting(urls)
+    }
+
+    @objc private func clearPunctuationLearning() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Clear all learned punctuation?"
+        alert.informativeText = "This permanently deletes the decision ledger and every learned sentence-level punctuation pattern on this Mac. Future dictations rely on the built-in heuristics only, and learning starts over from zero. This cannot be undone."
+        alert.addButton(withTitle: "Clear All Learning")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        PunctuationLearning.clearAll()
+        showError("Learning cleared", "All learned punctuation patterns and the decision ledger were deleted.")
     }
 
     private func showError(_ title: String, _ message: String) {

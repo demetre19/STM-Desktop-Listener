@@ -588,10 +588,9 @@ final class DictationController {
 
         transcriptionTasks.removeAll()
 
-        let text = (1...max(totalChunkCount, currentChunkIndex))
-            .compactMap { partialTranscripts[$0] }
-            .joined(separator: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = SpokenDictationFormatter.joiningChunks(
+            (1...max(totalChunkCount, currentChunkIndex)).compactMap { partialTranscripts[$0] }
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
 
         if text.isEmpty {
             partialTranscripts.removeAll()
@@ -610,12 +609,19 @@ final class DictationController {
             Logger.log("dictation completed as matched voice command")
             return
         }
-        let formattedText = SpokenDictationFormatter.apply(to: text)
+        let formattedText = SpokenDictationFormatter.applyingSpokenCommands(to: text)
         let substitutedText = SpokenDictationFormatter.applyingSubstitutions(
             ConfigStore.stringDictionary("dictation.wordSubstitutions"),
             to: formattedText
         )
-        let punctuatedText = LocalPunctuationService.apply(to: substitutedText)
+        let trace = PunctuationLearning.Trace()
+        let punctuatedText = LocalPunctuationService.apply(to: substitutedText, trace: trace)
+        PunctuationLearning.record(
+            engine: activeTranscriptionEngine == .qwen ? "qwen" : "worker",
+            source: substitutedText,
+            accepted: punctuatedText,
+            trace: trace
+        )
         completeDictation(with: punctuatedText, polished: false)
     }
 
@@ -667,7 +673,7 @@ final class DictationController {
                     texts.append(text)
                 }
             }
-            return texts.joined(separator: " ")
+            return SpokenDictationFormatter.joiningChunks(texts)
         }
     }
 

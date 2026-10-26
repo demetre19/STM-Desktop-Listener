@@ -49,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillTerminate(_ notification: Notification) {
         Logger.log("runtime app event=willTerminate")
+        PunctuationLearning.Policy.shared.flush()
         features.stopCaptureCache()
         dictationHUD.hide()
         features.dictation.cancel()
