@@ -387,7 +387,6 @@ enum DictationCleanup {
     private static func collapsingRepeats(_ text: String) -> String {
         let words = wordTokens(text)
         guard words.count > 1 else { return text }
-        let ns = text as NSString
         var removals: [NSRange] = []
         var i = words.count - 1
         while i >= 1 {
