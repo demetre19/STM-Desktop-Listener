@@ -222,8 +222,9 @@ struct ScreenshotEditorRendererTests {
         expect(cropped.width == 101 && cropped.height == 79, "crop preserves the selected pixel dimensions")
 
         runCalloutChecks()
+        runLayerChecks()
 
-        print("ScreenshotEditorRendererTests: all 31 checks passed")
+        print("ScreenshotEditorRendererTests: all 34 checks passed")
     }
 
     /// Shottr-parity text callout: flat by default, flush nub, blob tail that follows the tip, hit-testable, never exported.
@@ -296,9 +297,14 @@ struct ScreenshotEditorRendererTests {
         // Window coordinates are y-up; the flipped canvas maps image y to 240 - y.
         func windowPoint(_ image: CGPoint) -> CGPoint { CGPoint(x: image.x, y: 240 - image.y) }
         let tailMid = windowPoint(CGPoint(x: rect.midX, y: rect.maxY + 25))
+        // Stacked layers: with the arrow tool, a click on a callout draws a new arrow —
+        // only a double-click promotes the callout to the selected, movable layer.
         canvas.mouseDown(with: mouseEvent(.leftMouseDown, at: tailMid, windowNumber: window.windowNumber))
         canvas.mouseUp(with: mouseEvent(.leftMouseUp, at: tailMid, windowNumber: window.windowNumber))
-        expect(canvas.selectedAnnotation === callout, "clicking the tail selects the callout instead of starting a new annotation")
+        expect(canvas.selectedAnnotation !== callout, "arrow tool single click on a callout never grabs the layer")
+        canvas.mouseDown(with: mouseEvent(.leftMouseDown, at: tailMid, windowNumber: window.windowNumber, clickCount: 2))
+        canvas.mouseUp(with: mouseEvent(.leftMouseUp, at: tailMid, windowNumber: window.windowNumber))
+        expect(canvas.selectedAnnotation === callout, "double-clicking the tail selects the callout layer")
         let inside = windowPoint(CGPoint(x: rect.midX, y: rect.midY))
         canvas.mouseDown(with: mouseEvent(.leftMouseDown, at: windowPoint(tip), windowNumber: window.windowNumber))
         canvas.mouseDragged(with: mouseEvent(.leftMouseDragged, at: inside, windowNumber: window.windowNumber))
@@ -324,11 +330,66 @@ struct ScreenshotEditorRendererTests {
         expect(callout.tailPoint != nil && abs(callout.tailPoint!.y - (movedRect.maxY + 70)) < 0.5, "pulling the flush nub with the text tool grows the tail to the pointer")
     }
 
+    /// Stacked layers: a click-drag always draws with the active tool. An existing layer only
+    /// grabs the pointer under its own tool or after a double-click selection; switching
+    /// tools drops the selection so overlapping layers never block drawing.
+    private static func runLayerChecks() {
+        guard let white = makeSolidImage(width: 320, height: 240, color: .white) else {
+            fail("could not create layer test image")
+        }
+        let canvas = ScreenshotEditorCanvasView(image: white)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 240), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = canvas
+        func windowPoint(_ image: CGPoint) -> CGPoint { CGPoint(x: image.x, y: 240 - image.y) }
+        func drag(_ tool: ScreenshotTool, _ from: CGPoint, _ to: CGPoint, clickCount: Int = 1) {
+            canvas.selectTool(tool)
+            canvas.mouseDown(with: mouseEvent(.leftMouseDown, at: windowPoint(from), windowNumber: window.windowNumber, clickCount: clickCount))
+            canvas.mouseDragged(with: mouseEvent(.leftMouseDragged, at: windowPoint(to), windowNumber: window.windowNumber))
+            canvas.mouseUp(with: mouseEvent(.leftMouseUp, at: windowPoint(to), windowNumber: window.windowNumber))
+        }
+
+        drag(.blur, CGPoint(x: 40, y: 40), CGPoint(x: 200, y: 160))
+        guard let blur = canvas.annotations.last, blur.tool == .blur else {
+            fail("blur layer was not committed")
+        }
+
+        // The reported bug: dragging an arrow inside the blur must draw, not move the blur.
+        drag(.arrow, CGPoint(x: 80, y: 60), CGPoint(x: 160, y: 120))
+        guard let arrow = canvas.annotations.last, arrow.tool == .arrow else {
+            fail("dragging the arrow tool inside a blur did not draw an arrow")
+        }
+        expect(
+            arrow.start == CGPoint(x: 80, y: 60)
+                && blur.start == CGPoint(x: 40, y: 40)
+                && canvas.selectedAnnotation === arrow,
+            "arrow tool draws over the blur layer instead of moving it"
+        )
+
+        // Its own tool still grabs the layer.
+        drag(.blur, CGPoint(x: 60, y: 60), CGPoint(x: 80, y: 80))
+        expect(
+            blur.start == CGPoint(x: 60, y: 60)
+                && canvas.selectedAnnotation === blur,
+            "blur tool moves the blur layer"
+        )
+
+        // Switching tools drops the selection; a foreign click never revives it.
+        drag(.box, CGPoint(x: 100, y: 100), CGPoint(x: 220, y: 200))
+        guard canvas.annotations.last?.tool == .box else {
+            fail("box tool did not draw over the selected blur")
+        }
+        expect(
+            canvas.selectedAnnotation === canvas.annotations.last
+                && canvas.selectedAnnotation !== blur,
+            "switching tools deselects so stacking never grabs the previous layer"
+        )
+    }
+
     private static func annotation(_ tool: ScreenshotTool, from start: CGPoint, to end: CGPoint, color: NSColor) -> ScreenshotAnnotation {
         ScreenshotAnnotation(tool: tool, start: start, end: end, color: color, strokeWidth: 6)
     }
 
-    private static func mouseEvent(_ type: NSEvent.EventType, at point: CGPoint, windowNumber: Int) -> NSEvent {
+    private static func mouseEvent(_ type: NSEvent.EventType, at point: CGPoint, windowNumber: Int, clickCount: Int = 1) -> NSEvent {
         guard let event = NSEvent.mouseEvent(
             with: type,
             location: point,
@@ -337,7 +398,7 @@ struct ScreenshotEditorRendererTests {
             windowNumber: windowNumber,
             context: nil,
             eventNumber: 0,
-            clickCount: 1,
+            clickCount: clickCount,
             pressure: 1
         ) else {
             fail("could not create number tool mouse event")

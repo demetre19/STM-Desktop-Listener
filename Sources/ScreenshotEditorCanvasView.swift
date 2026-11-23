@@ -146,11 +146,19 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
         window?.makeFirstResponder(self)
         let viewPoint = convert(event.locationInWindow, from: nil)
         let point = imagePoint(from: viewPoint)
-        if event.clickCount == 2,
-           let annotation = textAnnotation(at: point) {
-            select(annotation)
-            beginTextEntry(at: annotation.start, editing: annotation)
-            return
+        if event.clickCount == 2 {
+            if currentTool == .text, let annotation = textAnnotation(at: point) {
+                select(annotation)
+                beginTextEntry(at: annotation.start, editing: annotation)
+                return
+            }
+            // Stacked layers: a double-click promotes the topmost layer to the selected,
+            // movable layer (shown with selection chrome) so single clicks always draw.
+            if let annotation = annotation(at: point) {
+                select(annotation)
+                dragMode = .moving(annotation: annotation, lastPoint: point)
+                return
+            }
         }
 
         if currentTool == .text {
@@ -224,7 +232,10 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
             }
         }
 
-        if let hit = annotation(at: point) {
+        // A single click grabs a layer only when it matches the active tool or is already
+        // selected via double-click. Other annotations stay inert so tools stack freely.
+        if let hit = annotation(at: point),
+           hit === selectedAnnotation || hit.tool == currentTool {
             select(hit)
             dragMode = .moving(annotation: hit, lastPoint: point)
             return
@@ -351,9 +362,10 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
 
     override func mouseMoved(with event: NSEvent) {
         let point = imagePoint(from: convert(event.locationInWindow, from: nil))
+        let grabbable = annotation(at: point).map { $0 === selectedAnnotation || $0.tool == currentTool } ?? false
         if let selectedAnnotation, resizeCorner(at: point, annotation: selectedAnnotation) != nil {
             NSCursor.crosshair.set()
-        } else if annotation(at: point) != nil {
+        } else if grabbable {
             NSCursor.openHand.set()
         } else {
             NSCursor.crosshair.set()
@@ -392,6 +404,9 @@ final class ScreenshotEditorCanvasView: NSView, NSTextFieldDelegate {
     func selectTool(_ tool: ScreenshotTool) {
         currentTool = tool
         if tool != .crop { cropRect = nil }
+        // Layers stay selected only under their own tool; switching tools drops the
+        // selection so the next click starts drawing instead of moving an old layer.
+        if selectedAnnotation != nil { select(nil) }
         window?.makeFirstResponder(self)
         needsDisplay = true
     }
