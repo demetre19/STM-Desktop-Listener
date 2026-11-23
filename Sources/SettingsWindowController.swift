@@ -214,6 +214,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var transcriptionEnginePopup: NSPopUpButton?
     private var voiceCommandsCheck: NSButton?
     private var englishOnlyCheck: NSButton?
+    private var contentCleanupCheck: NSButton?
+    private var postEditCheck: NSButton?
     private var substitutionsTextView: NSTextView?
     private var qwenStatusLabel: NSTextField?
     private var qwenDownloadButton: STMActionButton?
@@ -509,6 +511,39 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         englishOnlyHint.widthAnchor.constraint(equalToConstant: 760).isActive = true
         stack.addArrangedSubview(englishOnlyHint)
 
+        let cleanupCheck = NSButton(
+            checkboxWithTitle: "Clean dictated text (fillers, repeats, casing)",
+            target: nil,
+            action: nil
+        )
+        cleanupCheck.state = ConfigStore.bool("dictation.contentCleanup", default: true) ? .on : .off
+        contentCleanupCheck = cleanupCheck
+        stack.addArrangedSubview(polishFieldRow("Text cleanup", control: cleanupCheck))
+
+        let cleanupHint = label(
+            "Removes um/uh, collapsed stutters, leftover spoken punctuation, and mid-sentence capitals before punctuation learning. Zero RAM, instant, no model.",
+            font: .systemFont(ofSize: 11)
+        )
+        cleanupHint.textColor = SettingsPalette.muted
+        cleanupHint.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        stack.addArrangedSubview(cleanupHint)
+
+        let postEditCheck = NSButton(
+            checkboxWithTitle: "Learn from my in-place corrections",
+            target: nil,
+            action: nil
+        )
+        postEditCheck.state = ConfigStore.bool("dictation.capturePostEdits", default: true) ? .on : .off
+        self.postEditCheck = postEditCheck
+        stack.addArrangedSubview(polishFieldRow("Post-edit learning", control: postEditCheck))
+
+        let postEditHint = label(
+            "When you edit a paste before the next dictation, logs what you changed so future prompts can learn your real final text.",
+            font: .systemFont(ofSize: 11)
+        )
+        postEditHint.textColor = SettingsPalette.muted
+        postEditHint.widthAnchor.constraint(equalToConstant: 760).isActive = true
+        stack.addArrangedSubview(postEditHint)
         let substitutionsEditor = NSTextView(frame: NSRect(x: 0, y: 0, width: 572, height: 102))
         substitutionsEditor.identifier = NSUserInterfaceItemIdentifier("dictationSubstitutionsEditor")
         substitutionsEditor.isRichText = false
@@ -1326,6 +1361,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
             let substitutions = Self.parsedSubstitutions(from: substitutionsTextView?.string ?? "")
             try ConfigStore.set(substitutions, for: "dictation.wordSubstitutions")
+            try ConfigStore.set(contentCleanupCheck?.state == .on, for: "dictation.contentCleanup")
+            try ConfigStore.set(postEditCheck?.state == .on, for: "dictation.capturePostEdits")
 
             onSettingsChanged()
             rebuildContentView()

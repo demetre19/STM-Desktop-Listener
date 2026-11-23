@@ -276,6 +276,25 @@ enum PunctuationLearning {
         handle.write(Data((line + "\n").utf8))
     }
 
+    /// Records the user's own in-place correction to a pasted dictation: the
+    /// text we pasted versus what was finally left in the field. Written as a
+    /// decision-free ledger entry so `rebuildPolicyFromLog`/`loggedDecisions`
+    /// skip it, while audits and future trainers can mine source→final pairs
+    /// (the "what it ends with" signal the model never sees).
+    static func recordPostEdit(pasted: String, final: String) {
+        guard !pasted.isEmpty, !final.isEmpty, pasted != final else { return }
+        let payload: [String: Any] = [
+            "schema": 1,
+            "date": ISO8601DateFormatter().string(from: Date()),
+            "kind": "postEdit",
+            "pasted": pasted,
+            "final": final,
+        ]
+        logQueue.async {
+            appendLogLine(payload)
+        }
+    }
+
     /// Re-distills the policy from the decision ledger — e.g. after an LLM audit edits the
     /// log, or after a policy file is corrupted or cleared. Replays every recorded decision
     /// as if it were observed live.

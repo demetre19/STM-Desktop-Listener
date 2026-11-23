@@ -1,4 +1,5 @@
 import Cocoa
+import ApplicationServices
 import AVFoundation
 
 enum DictationState {
@@ -59,6 +60,10 @@ final class DictationController {
     private var activeTranscriptionEngine: DictationTranscriptionEngine = .worker
     private var qwenLiveChunkPolicy = QwenLiveChunkPolicy()
     private var chunkRotationPending = false
+
+    /// Last text this controller pasted, so the next dictation can capture any
+    /// user edits made to it ("what it finally looked like").
+    private var lastPastedText: String?
 
     private var isBusy = false
     private var currentModel = TranscriptionModel.load()
@@ -171,6 +176,7 @@ final class DictationController {
     }
 
     private func startRecording() {
+        capturePostEditIfNeeded()
         guard !isBusy else { return }
         let localConfiguration = DictationLocalConfiguration.load()
         if localConfiguration.engine == .worker {
@@ -588,11 +594,11 @@ final class DictationController {
 
         transcriptionTasks.removeAll()
 
-        let text = SpokenDictationFormatter.joiningChunks(
+        let rawTranscript = SpokenDictationFormatter.joiningChunks(
             (1...max(totalChunkCount, currentChunkIndex)).compactMap { partialTranscripts[$0] }
         ).trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if text.isEmpty {
+        if rawTranscript.isEmpty {
             partialTranscripts.removeAll()
             finishRequested = false
             isBusy = false
@@ -603,22 +609,32 @@ final class DictationController {
 
         partialTranscripts.removeAll()
         finishRequested = false
-        if onVoiceCommand?(text) == true {
+        if onVoiceCommand?(rawTranscript) == true {
             isBusy = false
             onStateChange?(.idle)
             Logger.log("dictation completed as matched voice command")
             return
         }
-        let formattedText = SpokenDictationFormatter.applyingSpokenCommands(to: text)
+        let formattedText = SpokenDictationFormatter.applyingSpokenCommands(to: rawTranscript)
         let substitutedText = SpokenDictationFormatter.applyingSubstitutions(
             ConfigStore.stringDictionary("dictation.wordSubstitutions"),
             to: formattedText
         )
+        // Deterministic cleanup (fillers, stutters, leftover spoken punctuation,
+        // mid-clause casing) runs before the punctuation model so the learner
+        // still sees raw ASR input vs final output. Toggle in Voice AI settings.
+        let rawForLearner = substitutedText
+        let cleanupInput: String
+        if ConfigStore.bool("dictation.contentCleanup", default: true) {
+            cleanupInput = DictationCleanup.cleaningContent(substitutedText)
+        } else {
+            cleanupInput = substitutedText
+        }
         let trace = PunctuationLearning.Trace()
-        let punctuatedText = LocalPunctuationService.apply(to: substitutedText, trace: trace)
+        let punctuatedText = LocalPunctuationService.apply(to: cleanupInput, trace: trace)
         PunctuationLearning.record(
             engine: activeTranscriptionEngine == .qwen ? "qwen" : "worker",
-            source: substitutedText,
+            source: rawForLearner,
             accepted: punctuatedText,
             trace: trace
         )
@@ -633,6 +649,66 @@ final class DictationController {
         clipboard.copyText(text)
         clipboard.pasteIfAllowed(force: true)
         Logger.log("dictation complete chunks=\(completedChunkCount) characters=\(text.count) polished=\(polished)")
+        lastPastedText = text
+    }
+
+    // MARK: - Post-edit learning capture
+
+    /// If the user edited the last pasted dictation in-place before starting a
+    /// new one, read the focused field once and log the corrected text so the
+    /// learner sees the *real* final output, not just what the model emitted.
+    private func capturePostEditIfNeeded() {
+        guard let pasted = lastPastedText else { return }
+        lastPastedText = nil
+        guard ConfigStore.bool("dictation.capturePostEdits", default: true) else {
+            Logger.log("post-edit skip reason=disabled")
+            return
+        }
+        guard let focused = focusedTextViaAccessibility() else {
+            Logger.log("post-edit skip reason=ax-\(lastPostEditReadFailure?.rawValue ?? "unknown") pastedChars=\(pasted.count)")
+            return
+        }
+        guard focused != pasted else {
+            Logger.log("post-edit skip reason=unedited pastedChars=\(pasted.count)")
+            return
+        }
+        // Only log when the field actually still contains our pasted text;
+        // otherwise the user typed unrelated content.
+        guard focused.contains(pasted.prefix(min(pasted.count, 32))) ||
+              pasted.contains(focused.prefix(min(focused.count, 32))) else {
+            Logger.log("post-edit skip reason=field-changed pastedChars=\(pasted.count) focusedChars=\(focused.count)")
+            return
+        }
+        PunctuationLearning.recordPostEdit(pasted: pasted, final: focused)
+        Logger.log("post-edit captured pastedChars=\(pasted.count) finalChars=\(focused.count)")
+    }
+
+    private enum PostEditReadFailure: String {
+        case axUntrusted, noFrontmostApp, noFocusedElement, wrongType, noValue
+    }
+
+    private var lastPostEditReadFailure: PostEditReadFailure?
+
+    private func focusedTextViaAccessibility() -> String? {
+        lastPostEditReadFailure = nil
+        func fail(_ reason: PostEditReadFailure) -> String? {
+            lastPostEditReadFailure = reason
+            return nil
+        }
+        guard AXIsProcessTrusted() else { return fail(.axUntrusted) }
+        guard let app = NSWorkspace.shared.frontmostApplication else { return fail(.noFrontmostApp) }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        var focusedValue: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            appElement, kAXFocusedUIElementAttribute as CFString, &focusedValue
+        ) == .success, let focused = focusedValue else { return fail(.noFocusedElement) }
+        guard CFGetTypeID(focused) == AXUIElementGetTypeID() else { return fail(.wrongType) }
+        let element = focused as! AXUIElement
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXValueAttribute as CFString, &value
+        ) == .success, let text = value as? String, !text.isEmpty else { return fail(.noValue) }
+        return String(text.prefix(64 * 1024))
     }
 
     private func transcribeChunk(_ chunk: AudioChunk) async throws -> String {
