@@ -1397,8 +1397,23 @@ enum SpokenDictationFormatter {
         "(?i)(?<![\\p{L}\\p{N}])\(phrase)(?![\\p{L}\\p{N}])(?:[,.])?"
     }
 
+    private static let regularExpressionCacheLock = NSLock()
+    private static var regularExpressionCache: [String: NSRegularExpression] = [:]
+
+    private static func cachedRegularExpression(pattern: String) -> NSRegularExpression? {
+        regularExpressionCacheLock.lock()
+        defer { regularExpressionCacheLock.unlock() }
+        if let cached = regularExpressionCache[pattern] { return cached }
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
+        if regularExpressionCache.count >= 512 {
+            regularExpressionCache.removeAll()
+        }
+        regularExpressionCache[pattern] = expression
+        return expression
+    }
+
     private static func replacingMatches(in text: String, pattern: String, with replacement: String) -> String {
-        guard let expression = try? NSRegularExpression(pattern: pattern) else { return text }
+        guard let expression = cachedRegularExpression(pattern: pattern) else { return text }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         return expression.stringByReplacingMatches(in: text, range: range, withTemplate: replacement)
     }
