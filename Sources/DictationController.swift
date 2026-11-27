@@ -617,11 +617,13 @@ final class DictationController {
             Logger.log("dictation completed as matched voice command")
             return
         }
+        let pipelineStart = CFAbsoluteTimeGetCurrent()
         let formattedText = SpokenDictationFormatter.applyingSpokenCommands(to: rawTranscript)
         let substitutedText = SpokenDictationFormatter.applyingSubstitutions(
             ConfigStore.stringDictionary("dictation.wordSubstitutions"),
             to: formattedText
         )
+        let commandsFinished = CFAbsoluteTimeGetCurrent()
         // Deterministic cleanup (fillers, stutters, leftover spoken punctuation,
         // mid-clause casing) runs before the punctuation model so the learner
         // still sees raw ASR input vs final output. Toggle in Voice AI settings.
@@ -632,15 +634,30 @@ final class DictationController {
         } else {
             cleanupInput = substitutedText
         }
+        let cleanupFinished = CFAbsoluteTimeGetCurrent()
         let trace = PunctuationLearning.Trace()
         let punctuatedText = LocalPunctuationService.apply(to: cleanupInput, trace: trace)
+        let punctuationFinished = CFAbsoluteTimeGetCurrent()
         PunctuationLearning.record(
             engine: activeTranscriptionEngine == .qwen ? "qwen" : "worker",
             source: rawForLearner,
             accepted: punctuatedText,
             trace: trace
         )
+        let recordFinished = CFAbsoluteTimeGetCurrent()
         completeDictation(with: punctuatedText, polished: false)
+        Logger.logAsync(
+            "dictation pipeline timing commandsMs=\(milliseconds(from: pipelineStart, to: commandsFinished)) " +
+                "cleanupMs=\(milliseconds(from: commandsFinished, to: cleanupFinished)) " +
+                "punctuationMs=\(milliseconds(from: cleanupFinished, to: punctuationFinished)) " +
+                "learningRecordMs=\(milliseconds(from: punctuationFinished, to: recordFinished)) " +
+                "prePasteTotalMs=\(milliseconds(from: pipelineStart, to: recordFinished)) " +
+                "characters=\(punctuatedText.count) decisions=\(trace.decisions.count)"
+        )
+    }
+
+    private func milliseconds(from start: CFAbsoluteTime, to end: CFAbsoluteTime) -> Int {
+        Int((end - start) * 1000)
     }
 
 
