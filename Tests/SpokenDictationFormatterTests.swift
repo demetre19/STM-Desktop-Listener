@@ -225,6 +225,11 @@ struct SpokenDictationFormatterTests {
                 "First, SEND 2 copies!",
                 "first send 2 copies"
             ),
+            (
+                "model input preserves contractions and meaningful symbols",
+                "I don't use C++.",
+                "i don't use c++"
+            ),
         ]
         let pipelineCases: [(name: String, input: String, candidate: String, expected: String)] = [
             (

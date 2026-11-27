@@ -147,10 +147,17 @@ enum SpokenDictationFormatter {
     /// changes the whitespace tokens themselves and puts the model outside its input contract.
     /// This projection is only for the model; the original text remains the merge source so
     /// recognizer punctuation and explicit commands are still preserved as evidence.
+    private static let punctuationModelTrimCharacters: CharacterSet = {
+        var characters = CharacterSet.punctuationCharacters
+        characters.insert(charactersIn: "\u{FE00}")
+        return characters
+    }()
+
     static func normalizingForPunctuationModel(_ text: String) -> String {
-        wordMatches(in: text)
-            .map { $0.text.lowercased() }
-            .joined(separator: " ")
+        text.split(whereSeparator: { $0.isWhitespace }).compactMap { token in
+            let normalized = token.trimmingCharacters(in: punctuationModelTrimCharacters).lowercased()
+            return normalized.isEmpty ? nil : normalized
+        }.joined(separator: " ")
     }
 
     static func applyingAutomaticPunctuation(
