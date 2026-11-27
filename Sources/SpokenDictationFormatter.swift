@@ -41,21 +41,29 @@ enum SpokenDictationFormatter {
     /// all output before text leaves this type.
     static let spokenMarker = "\u{FE00}"
 
+    /// Invisible marker at a measured quiet chunk boundary. It is evidence for fusion while
+    /// punctuation is being arbitrated and must never survive into pasted output.
+    static let prosodyMarker = "\u{200B}"
+
     static func apply(to transcript: String) -> String {
         strippingSpokenMarkers(applyingSpokenCommands(to: transcript))
     }
 
     static func strippingSpokenMarkers(_ text: String) -> String {
         text.replacingOccurrences(of: spokenMarker, with: "")
+            .replacingOccurrences(of: prosodyMarker, with: "")
     }
 
     /// Joins independently transcribed audio chunks. Each recognizer adds terminal punctuation
     /// to its own chunk, so naive joining leaves stray `.`, `?`, and `,` artifacts mid-text.
     /// Interior punctuation is preserved; only boundary punctuation is removed so the guarded
     /// punctuation pass can repunctuate the whole transcript coherently.
-    static func joiningChunks(_ parts: [String]) -> String {
+    static func joiningChunks(
+        _ parts: [String],
+        prosodyBoundaryAfter: Set<Int> = []
+    ) -> String {
         let boundaryPunctuation = CharacterSet(charactersIn: ".,;:!?…\"'”’()[]")
-        var cleaned: [String] = []
+        var cleaned: [(index: Int, text: String)] = []
         for (index, part) in parts.enumerated() {
             var text = part.trimmingCharacters(in: .whitespacesAndNewlines)
             if index > 0 {
@@ -71,10 +79,23 @@ enum SpokenDictationFormatter {
                 text = text.trimmingCharacters(in: .whitespacesAndNewlines)
             }
             if !text.isEmpty {
-                cleaned.append(text)
+                cleaned.append((index, text))
             }
         }
-        return cleaned.joined(separator: " ")
+        var result = ""
+        var previousIndex: Int?
+        for item in cleaned {
+            if result.isEmpty {
+                result = item.text
+            } else {
+                if let previous = previousIndex, prosodyBoundaryAfter.contains(previous) {
+                    result += prosodyMarker
+                }
+                result += " " + item.text
+            }
+            previousIndex = item.index
+        }
+        return result
     }
 
     static func applyingSpokenCommands(to transcript: String) -> String {
@@ -149,7 +170,7 @@ enum SpokenDictationFormatter {
     /// recognizer punctuation and explicit commands are still preserved as evidence.
     private static let punctuationModelTrimCharacters: CharacterSet = {
         var characters = CharacterSet.punctuationCharacters
-        characters.insert(charactersIn: "\u{FE00}")
+        characters.insert(charactersIn: "\u{FE00}\u{200B}")
         return characters
     }()
 
@@ -492,6 +513,7 @@ enum SpokenDictationFormatter {
                         nextIndex: right,
                         words: candidateWords,
                         in: candidateText,
+                        prosodicBoundary: sourceGap.contains(prosodyMarker),
                         trace: trace
                     ) {
                         if sanitized == " ", gap.range(of: "[.!?…]", options: .regularExpression) != nil {
@@ -618,6 +640,7 @@ enum SpokenDictationFormatter {
         nextIndex: Int,
         words: [(text: String, range: NSRange)],
         in candidate: NSString,
+        prosodicBoundary: Bool = false,
         trace: PunctuationLearning.Trace? = nil
     ) -> String? {
         let trimmed = gap.trimmingCharacters(in: .whitespaces)
@@ -641,7 +664,8 @@ enum SpokenDictationFormatter {
                 previousIndex: previousIndex,
                 terminator: firstTerminator(in: trimmed),
                 words: words,
-                in: candidate
+                in: candidate,
+                preferKeep: prosodicBoundary
             ) {
             case .merge(let learned):
                 record("merge", learned: learned)
@@ -698,6 +722,10 @@ enum SpokenDictationFormatter {
                     record("replace", learned: true)
                     return replacingTerminatorRun(in: trimmed, with: replacement) + " "
                 }
+            }
+            if prosodicBoundary {
+                record("keep")
+                return nil
             }
             if keepsModelComma(
                 previousText: words[previousIndex].text,
@@ -834,7 +862,8 @@ enum SpokenDictationFormatter {
         previousIndex: Int,
         terminator: String,
         words: [(text: String, range: NSRange)],
-        in text: NSString
+        in text: NSString,
+        preferKeep: Bool = false
     ) -> TerminatorVerdict {
         let previousWord = words[previousIndex].text.lowercased()
         let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: text)
@@ -865,6 +894,13 @@ enum SpokenDictationFormatter {
                     return .replace(replacement, learned: true)
                 }
             }
+        }
+
+        // A measured quiet boundary is prosodic evidence, but not sufficient by itself: it
+        // only breaks a static merge tie when the lexical model/recognizer also proposed a
+        // terminator. Correction-grounded votes above still win over prosody.
+        if preferKeep {
+            return .keep(learned: false)
         }
 
         // Short clauses (2–4 words) that legitimately start with a statement opener keep

@@ -620,8 +620,15 @@ final class DictationController {
 
         transcriptionTasks.removeAll()
 
+        let orderedTranscripts = (1...max(totalChunkCount, currentChunkIndex)).compactMap { index in
+            partialTranscripts[index].map { (index: index, text: $0) }
+        }
+        let quietBoundaryIndexes = Set(orderedTranscripts.compactMap { item in
+            chunkBoundaryReasons[item.index] == "quiet" ? item.index : nil
+        })
         let rawTranscript = SpokenDictationFormatter.joiningChunks(
-            (1...max(totalChunkCount, currentChunkIndex)).compactMap { partialTranscripts[$0] }
+            orderedTranscripts.map(\.text),
+            prosodyBoundaryAfter: quietBoundaryIndexes
         ).trimmingCharacters(in: .whitespacesAndNewlines)
 
         if rawTranscript.isEmpty {

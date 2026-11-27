@@ -749,7 +749,7 @@ enum PunctuationLearning {
     static func recordPostEdit(pasted: String, final: String) {
         guard !pasted.isEmpty, !final.isEmpty, pasted != final else { return }
         let payload: [String: Any] = [
-            "schema": 1,
+            "schema": 2,
             "date": ISO8601DateFormatter().string(from: Date()),
             "kind": "postEdit",
             "pasted": pasted,

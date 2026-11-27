@@ -236,6 +236,11 @@ struct SpokenDictationFormatterTests {
                 "I don't use C++.",
                 "i don't use c++"
             ),
+            (
+                "model input strips prosody markers",
+                "hello\u{200B} world",
+                "hello world"
+            ),
         ]
         let pipelineCases: [(name: String, input: String, candidate: String, expected: String)] = [
             (
@@ -334,6 +339,53 @@ struct SpokenDictationFormatterTests {
             }
         }
 
+        let prosodicJoined = SpokenDictationFormatter.joiningChunks(
+            ["first part.", "and then."],
+            prosodyBoundaryAfter: [0]
+        )
+        guard prosodicJoined.contains(SpokenDictationFormatter.prosodyMarker),
+              !SpokenDictationFormatter.strippingSpokenMarkers(prosodicJoined).contains(SpokenDictationFormatter.prosodyMarker) else {
+            print("FAIL: quiet-boundary prosody marker was not inserted and stripped safely")
+            exit(EXIT_FAILURE)
+        }
+
+        let prosodyTerminatorActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "I was going and. Then left.",
+            to: "I was going and\u{200B} then left"
+        )
+        guard prosodyTerminatorActual == "I was going and. Then left.",
+              !prosodyTerminatorActual.contains(SpokenDictationFormatter.prosodyMarker) else {
+            print("FAIL: quiet boundary did not preserve agreeing lexical terminator: \(String(reflecting: prosodyTerminatorActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        let prosodyCommaActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "I want it, inside the one.",
+            to: "I want it\u{200B} inside the one"
+        )
+        guard prosodyCommaActual == "I want it, inside the one." else {
+            print("FAIL: quiet boundary did not preserve agreeing lexical comma: \(String(reflecting: prosodyCommaActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .period,
+            desired: PunctuationLearning.BoundaryLabel.none,
+            previousWord: "and",
+            nextWord: "zthen",
+            clauseFirst: "zprosody",
+            shaped: false,
+            weight: 4
+        )
+        let correctionOverridesProsody = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zprosody and. Zthen finish.",
+            to: "Zprosody and\u{200B} zthen finish"
+        )
+        guard correctionOverridesProsody == "Zprosody and zthen finish." else {
+            print("FAIL: user correction did not override prosody fusion: \(String(reflecting: correctionOverridesProsody))")
+            exit(EXIT_FAILURE)
+        }
+
         PunctuationLearning.CorrectionPolicy.shared.observe(
             input: .period,
             desired: PunctuationLearning.BoundaryLabel.none,
@@ -427,6 +479,6 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 4) cases passed")
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 8) cases passed")
     }
 }
