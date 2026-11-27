@@ -508,6 +508,12 @@ enum SpokenDictationFormatter {
             return symbols
         }
 
+        func preservingTrailingSymbols(in sourceGap: String, replacement: String) -> String {
+            let symbols = trailingSymbolRun(in: sourceGap)
+            guard !symbols.isEmpty, !replacement.hasPrefix(symbols) else { return replacement }
+            return symbols + replacement
+        }
+
         let sourcePrefixRange = NSRange(location: 0, length: sourceWords[0].range.location)
         result.append(sourceText.substring(with: sourcePrefixRange))
         result.append(candidateWordText(for: 0, sourceWords: sourceWords, candidateWords: candidateWords, anchors: anchors))
@@ -568,7 +574,7 @@ enum SpokenDictationFormatter {
                             mergedBoundaryWords.insert(index + 1)
                         }
                         noteCasingAdjustment(gap: gap, sanitized: sanitized, boundaryIndex: index)
-                        result.append(sanitized)
+                        result.append(preservingTrailingSymbols(in: sourceGap, replacement: sanitized))
                     } else if PunctuationLearning.boundaryLabel(for: gap) == .none,
                               let inserted = learnedInsertionGap(
                                   previousIndex: index,
@@ -580,10 +586,9 @@ enum SpokenDictationFormatter {
                         if let first = inserted.first, ".?!".contains(first) {
                             learnedSentenceStartWords.insert(index + 1)
                         }
-                        result.append(trailingSymbolRun(in: sourceGap) + inserted)
+                        result.append(preservingTrailingSymbols(in: sourceGap, replacement: inserted))
                     } else {
-                        let symbols = trailingSymbolRun(in: sourceGap)
-                        result.append((!symbols.isEmpty && !gap.hasPrefix(symbols) ? symbols : "") + gap)
+                        result.append(preservingTrailingSymbols(in: sourceGap, replacement: gap))
                     }
                 } else {
                     result.append(" ")

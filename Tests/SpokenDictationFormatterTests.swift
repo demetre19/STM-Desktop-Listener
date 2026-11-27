@@ -615,6 +615,24 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 17) cases passed")
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .period,
+            desired: PunctuationLearning.BoundaryLabel.none,
+            previousWord: "zplus",
+            nextWord: "and",
+            clauseFirst: "use",
+            shaped: false,
+            weight: 3
+        )
+        let sanitizedSymbolActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Use zplus. And templates.",
+            to: "use zplus++ and templates"
+        )
+        guard sanitizedSymbolActual == "Use zplus++ and templates." else {
+            print("FAIL: sanitized learned replacement erased interior symbols: \(String(reflecting: sanitizedSymbolActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 18) cases passed")
     }
 }
