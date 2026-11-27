@@ -463,6 +463,18 @@ enum SpokenDictationFormatter {
         let result = NSMutableString(capacity: candidate.count)
         var learnedSentenceStartWords: Set<Int> = []
 
+        func noteCasingAdjustment(gap: String, sanitized: String, boundaryIndex: Int) {
+            let sanitizedTrimmed = sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
+            let gapHadTerminator = gap.range(of: "[.!?…]", options: .regularExpression) != nil
+            guard let first = sanitizedTrimmed.first else { return }
+            if ".?!".contains(first), !gapHadTerminator {
+                learnedSentenceStartWords.insert(boundaryIndex + 1)
+            }
+            if first == ",", gapHadTerminator {
+                mergedBoundaryWords.insert(boundaryIndex + 1)
+            }
+        }
+
         let sourcePrefixRange = NSRange(location: 0, length: sourceWords[0].range.location)
         result.append(sourceText.substring(with: sourcePrefixRange))
         result.append(candidateWordText(for: 0, sourceWords: sourceWords, candidateWords: candidateWords, anchors: anchors))
@@ -487,6 +499,7 @@ enum SpokenDictationFormatter {
                     mergedBoundaryWords: &mergedBoundaryWords,
                     trace: trace
                 ) {
+                    noteCasingAdjustment(gap: sourceGap, sanitized: sanitized, boundaryIndex: index)
                     result.append(sanitized)
                 } else {
                     result.append(sourceGap)
@@ -521,6 +534,7 @@ enum SpokenDictationFormatter {
                         if sanitized == " ", gap.range(of: "[.!?…]", options: .regularExpression) != nil {
                             mergedBoundaryWords.insert(index + 1)
                         }
+                        noteCasingAdjustment(gap: gap, sanitized: sanitized, boundaryIndex: index)
                         result.append(sanitized)
                     } else if PunctuationLearning.boundaryLabel(for: gap) == .none,
                               let inserted = learnedInsertionGap(

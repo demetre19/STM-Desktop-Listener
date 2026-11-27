@@ -497,6 +497,42 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 9) cases passed")
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .comma,
+            desired: .period,
+            previousWord: "zcommaprev",
+            nextWord: "zcommanext",
+            clauseFirst: "zcase",
+            shaped: false,
+            weight: 3
+        )
+        let commaReplacementActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zcase zcommaprev, zcommanext finish.",
+            to: "Zcase zcommaprev, zcommanext finish."
+        )
+        guard commaReplacementActual == "Zcase zcommaprev. Zcommanext finish." else {
+            print("FAIL: comma-to-period correction did not capitalize following word: \(String(reflecting: commaReplacementActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .period,
+            desired: .comma,
+            previousWord: "zperiodprev",
+            nextWord: "zperiodnext",
+            clauseFirst: "zcase",
+            shaped: false,
+            weight: 3
+        )
+        let periodReplacementActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zcase zperiodprev. Zperiodnext finish.",
+            to: "Zcase zperiodprev. Zperiodnext finish."
+        )
+        guard periodReplacementActual == "Zcase zperiodprev, zperiodnext finish." else {
+            print("FAIL: period-to-comma correction did not lowercase following word: \(String(reflecting: periodReplacementActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 11) cases passed")
     }
 }
