@@ -334,6 +334,74 @@ struct SpokenDictationFormatterTests {
             }
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count) cases passed")
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .period,
+            desired: PunctuationLearning.BoundaryLabel.none,
+            previousWord: "zomega",
+            nextWord: "then",
+            clauseFirst: "zalpha",
+            shaped: false,
+            weight: 3
+        )
+        let learnedTrace = PunctuationLearning.Trace()
+        let learnedActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zalpha zomega. Then beta.",
+            to: "Zalpha zomega. Then beta.",
+            trace: learnedTrace
+        )
+        guard learnedActual == "Zalpha zomega then beta.",
+              learnedTrace.decisions.contains(where: { $0.action == "merge" && $0.learned }) else {
+            print(
+                "FAIL: correction-grounded merge did not override fallback punctuation\n" +
+                    "  actual:   \(String(reflecting: learnedActual))\n" +
+                    "  decisions: \(learnedTrace.decisions)"
+            )
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .period,
+            desired: .question,
+            previousWord: "zreplace",
+            nextWord: "next",
+            clauseFirst: "zstart",
+            shaped: false,
+            weight: 3
+        )
+        let replacementActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zstart zreplace. Next finish.",
+            to: "Zstart zreplace. Next finish."
+        )
+        guard replacementActual.contains("zreplace?") else {
+            print("FAIL: correction-grounded terminator replacement missing: \(String(reflecting: replacementActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .period,
+            desired: .question,
+            previousWord: "zterminal",
+            nextWord: "",
+            clauseFirst: "please",
+            shaped: false,
+            weight: 3
+        )
+        let terminalTrace = PunctuationLearning.Trace()
+        let terminalActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Please zterminal.",
+            to: "Please zterminal.",
+            trace: terminalTrace
+        )
+        guard terminalActual == "Please zterminal?",
+              terminalTrace.decisions.contains(where: { $0.gap == "terminal" && $0.action == "replace" && $0.learned }) else {
+            print(
+                "FAIL: correction-grounded terminal replacement missing\n" +
+                    "  actual:   \(String(reflecting: terminalActual))\n" +
+                    "  decisions: \(terminalTrace.decisions)"
+            )
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 3) cases passed")
     }
 }

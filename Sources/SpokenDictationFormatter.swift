@@ -610,6 +610,9 @@ enum SpokenDictationFormatter {
             case .keep(let learned):
                 record("keep", learned: learned)
                 return nil
+            case .replace(let replacement, let learned):
+                record("replace", learned: learned)
+                return replacingTerminatorRun(in: trimmed, with: replacement) + " "
             case .undecided:
                 break
             }
@@ -634,6 +637,28 @@ enum SpokenDictationFormatter {
         }
 
         if trimmed.contains(",") {
+            let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: candidate)
+            let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: candidate)
+            if let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: .comma,
+                previousWord: words[previousIndex].text.lowercased(),
+                nextWord: words[nextIndex].text.lowercased(),
+                clauseFirst: words[clauseStart].text.lowercased(),
+                shaped: shaped
+            ) {
+                if preferred == PunctuationLearning.BoundaryLabel.none {
+                    record("space", learned: true)
+                    return " "
+                }
+                if preferred == .comma {
+                    record("keep", learned: true)
+                    return nil
+                }
+                if let replacement = preferred.replacementText, !replacement.isEmpty {
+                    record("replace", learned: true)
+                    return replacingTerminatorRun(in: trimmed, with: replacement) + " "
+                }
+            }
             if keepsModelComma(
                 previousText: words[previousIndex].text,
                 nextIndex: nextIndex,
@@ -694,6 +719,9 @@ enum SpokenDictationFormatter {
             case .keep(let learned):
                 record("keep", learned: learned)
                 return nil
+            case .replace(let replacement, let learned):
+                record("replace", learned: learned)
+                return replacingTerminatorRun(in: trimmed, with: replacement) + " "
             case .undecided:
                 break
             }
@@ -711,6 +739,28 @@ enum SpokenDictationFormatter {
         }
 
         if trimmed.contains(",") {
+            let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: sourceText)
+            let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: sourceText)
+            if let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: .comma,
+                previousWord: words[previousIndex].text.lowercased(),
+                nextWord: words[nextIndex].text.lowercased(),
+                clauseFirst: words[clauseStart].text.lowercased(),
+                shaped: shaped
+            ) {
+                if preferred == PunctuationLearning.BoundaryLabel.none {
+                    record("space", learned: true)
+                    return " "
+                }
+                if preferred == .comma {
+                    record("keep", learned: true)
+                    return nil
+                }
+                if let replacement = preferred.replacementText, !replacement.isEmpty {
+                    record("replace", learned: true)
+                    return replacingTerminatorRun(in: trimmed, with: replacement) + " "
+                }
+            }
             if keepsModelComma(
                 previousText: words[previousIndex].text,
                 nextIndex: nextIndex,
@@ -732,6 +782,7 @@ enum SpokenDictationFormatter {
     private enum TerminatorVerdict {
         case merge(learned: Bool)
         case keep(learned: Bool)
+        case replace(String, learned: Bool)
         case undecided
     }
 
@@ -753,15 +804,25 @@ enum SpokenDictationFormatter {
             words: words,
             in: text
         )
-        if !terminator.isEmpty,
-           let vote = PunctuationLearning.Policy.shared.vote(
-               terminator: terminator,
-               previousWord: previousWord,
-               nextWord: words[previousIndex + 1].text.lowercased(),
-               clauseFirst: words[clauseStart].text.lowercased(),
-               shaped: clauseShaped
-           ) {
-            return vote ? .merge(learned: true) : .keep(learned: true)
+        if !terminator.isEmpty {
+            let input = PunctuationLearning.boundaryLabel(for: terminator)
+            if let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: input,
+                previousWord: previousWord,
+                nextWord: words[previousIndex + 1].text.lowercased(),
+                clauseFirst: words[clauseStart].text.lowercased(),
+                shaped: clauseShaped
+            ) {
+                if preferred == input {
+                    return .keep(learned: true)
+                }
+                if preferred == PunctuationLearning.BoundaryLabel.none {
+                    return .merge(learned: true)
+                }
+                if let replacement = preferred.replacementText, !replacement.isEmpty {
+                    return .replace(replacement, learned: true)
+                }
+            }
         }
 
         // Short clauses (2–4 words) that legitimately start with a statement opener keep
@@ -818,6 +879,25 @@ enum SpokenDictationFormatter {
             }
         }
         return 0
+    }
+
+    /// Replaces the first comma/terminator run while preserving surrounding quote or bracket
+    /// characters. Used only for correction-grounded multiclass votes.
+    private static func replacingTerminatorRun(in trimmedGap: String, with replacement: String) -> String {
+        var result = ""
+        var replaced = false
+        for scalarView in trimmedGap.unicodeScalars {
+            let scalar = Character(scalarView)
+            if scalar == "." || scalar == "!" || scalar == "?" || scalar == "…" || scalar == "," {
+                if !replaced {
+                    result.append(replacement)
+                    replaced = true
+                }
+            } else {
+                result.append(scalar)
+            }
+        }
+        return result
     }
 
     /// Rebuilds a gap's terminator run from its clause shape. `?`/`!` become `.` when the
@@ -1027,7 +1107,7 @@ enum SpokenDictationFormatter {
         let finalWords = wordMatches(in: finalClause)
 
         if let terminal = stripped.range(of: #"[.!?…]+(?=[”’"')\]]*\s*$)"#, options: .regularExpression) {
-            func record(_ action: String) {
+            func record(_ action: String, learned: Bool = false) {
                 trace?.record(.init(
                     gap: "terminal",
                     terminator: String(stripped[terminal].first ?? "."),
@@ -1036,8 +1116,38 @@ enum SpokenDictationFormatter {
                     clauseFirst: finalWords.first?.text.lowercased() ?? "",
                     shaped: shaped,
                     action: action,
-                    learned: false
+                    learned: learned
                 ))
+            }
+            if !terminalIsSpoken {
+                let input = PunctuationLearning.boundaryLabel(
+                    for: String(stripped[terminal].first ?? ".")
+                )
+                if let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                    input: input,
+                    previousWord: finalWords.last?.text.lowercased() ?? "",
+                    nextWord: "",
+                    clauseFirst: finalWords.first?.text.lowercased() ?? "",
+                    shaped: shaped
+                ) {
+                    if preferred == input {
+                        record("keep", learned: true)
+                        return stripped
+                    }
+                    if preferred == PunctuationLearning.BoundaryLabel.none {
+                        var updated = stripped
+                        updated.removeSubrange(terminal)
+                        record("merge", learned: true)
+                        return updated
+                    }
+                    if preferred == .period || preferred == .question || preferred == .exclamation,
+                       let replacement = preferred.replacementText {
+                        var updated = stripped
+                        updated.replaceSubrange(terminal, with: replacement)
+                        record("replace", learned: true)
+                        return updated
+                    }
+                }
             }
             if shaped {
                 if terminalIsSpoken {

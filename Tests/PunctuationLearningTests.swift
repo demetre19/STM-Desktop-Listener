@@ -9,7 +9,8 @@ import Glibc
 @main
 struct PunctuationLearningTests {
     static func main() {
-        testLedgerReplayIgnoresLearnedDecisions()
+        testCorrectionPolicyRebuildsFromPostEdits()
+        testCorrectionObservations()
 
         let relatedCases: [(name: String, pasted: String, final: String, expected: Bool)] = [
             (
@@ -53,36 +54,122 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count + 1) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 5) cases passed")
     }
 
-    private static func testLedgerReplayIgnoresLearnedDecisions() {
-        let policyBackup = try? Data(contentsOf: PunctuationLearning.Policy.storeURL)
+    private static func testCorrectionObservations() {
+        let mergeDecision = PunctuationLearning.GapDecision(
+            gap: "model", terminator: ".", previous: "say", next: "and",
+            clauseFirst: "i", shaped: false, action: "keep", learned: false
+        )
+        let mergeObservations = PunctuationLearning.correctionObservations(
+            pasted: "I was going to say. And then he left.",
+            final: "I was going to say and then he left.",
+            decisions: [mergeDecision]
+        )
+        guard mergeObservations.count == 1,
+              mergeObservations[0].input == .period,
+              mergeObservations[0].desired == .none,
+              mergeObservations[0].weight == 3 else {
+            print("FAIL: punctuation removal correction was not converted to strong none evidence: \(mergeObservations)")
+            exit(EXIT_FAILURE)
+        }
+
+        let terminalDecision = PunctuationLearning.GapDecision(
+            gap: "terminal", terminator: ".", previous: "it", next: "",
+            clauseFirst: "can", shaped: false, action: "keep", learned: false
+        )
+        let questionObservations = PunctuationLearning.correctionObservations(
+            pasted: "Can you send it.",
+            final: "Can you send it?",
+            decisions: [terminalDecision]
+        )
+        guard questionObservations.count == 1,
+              questionObservations[0].desired == .question,
+              questionObservations[0].weight == 3 else {
+            print("FAIL: terminal replacement correction was not converted to question evidence: \(questionObservations)")
+            exit(EXIT_FAILURE)
+        }
+
+        let unchangedObservations = PunctuationLearning.correctionObservations(
+            pasted: "I was going to say. And then he left.",
+            final: "I was going to say. And then he left!",
+            decisions: [mergeDecision]
+        )
+        guard unchangedObservations.count == 1,
+              unchangedObservations[0].desired == .period,
+              unchangedObservations[0].weight == 1 else {
+            print("FAIL: unchanged edited boundary did not produce weak confirmation: \(unchangedObservations)")
+            exit(EXIT_FAILURE)
+        }
+
+        let wordEditObservations = PunctuationLearning.correctionObservations(
+            pasted: "I was going to say. And then he left.",
+            final: "I was going to mention. And then he left.",
+            decisions: [mergeDecision]
+        )
+        guard wordEditObservations.isEmpty else {
+            print("FAIL: ambiguous word edit produced punctuation supervision")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: mergeObservations[0].input,
+            desired: mergeObservations[0].desired,
+            previousWord: "zz-never-real-prev",
+            nextWord: "zz-never-real-next",
+            clauseFirst: "zz-never-real-clause",
+            shaped: false,
+            weight: mergeObservations[0].weight
+        )
+        let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+            input: .period,
+            previousWord: "zz-never-real-prev",
+            nextWord: "zz-never-real-next",
+            clauseFirst: "zz-never-real-clause",
+            shaped: false
+        )
+        guard preferred == PunctuationLearning.BoundaryLabel.none else {
+            print("FAIL: correction policy did not prefer user-corrected none label: \(String(describing: preferred))")
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    private static func testCorrectionPolicyRebuildsFromPostEdits() {
+        let policyBackup = try? Data(contentsOf: PunctuationLearning.CorrectionPolicy.storeURL)
         let ledgerBackup = try? Data(contentsOf: PunctuationLearning.trainingLogURL)
         defer {
-            try? FileManager.default.removeItem(at: PunctuationLearning.Policy.storeURL)
+            try? FileManager.default.removeItem(at: PunctuationLearning.CorrectionPolicy.storeURL)
             try? FileManager.default.removeItem(at: PunctuationLearning.trainingLogURL)
             if let policyBackup {
-                try? policyBackup.write(to: PunctuationLearning.Policy.storeURL, options: .atomic)
+                try? policyBackup.write(to: PunctuationLearning.CorrectionPolicy.storeURL, options: .atomic)
             }
             if let ledgerBackup {
                 try? ledgerBackup.write(to: PunctuationLearning.trainingLogURL, options: .atomic)
             }
         }
 
-        try? FileManager.default.removeItem(at: PunctuationLearning.Policy.storeURL)
-        let entry = #"{"schema":1,"decisions":[{"gap":"model","term":".","prev":"and","next":"then","clause":"alpha","shaped":false,"action":"merge","learned":true}]}"# + "\n"
-        try? String(repeating: entry, count: 20).write(to: PunctuationLearning.trainingLogURL, atomically: true, encoding: .utf8)
-        PunctuationLearning.Policy.shared.warm()
-        let vote = PunctuationLearning.Policy.shared.vote(
-            terminator: ".",
-            previousWord: "and",
-            nextWord: "then",
+        try? FileManager.default.removeItem(at: PunctuationLearning.CorrectionPolicy.storeURL)
+        let pasted = "Alpha zrebuildprev. Zrebuildnext end."
+        let final = "Alpha zrebuildprev zrebuildnext end."
+        let acceptedEntry = "{\"schema\":1,\"accepted\":\"\(pasted)\",\"decisions\":[{\"gap\":\"model\",\"term\":\".\",\"prev\":\"zrebuildprev\",\"next\":\"zrebuildnext\",\"clause\":\"alpha\",\"shaped\":false,\"action\":\"keep\",\"learned\":false}]}"
+        let editEntry = "{\"schema\":1,\"kind\":\"postEdit\",\"pasted\":\"\(pasted)\",\"final\":\"\(final)\"}"
+        try? (acceptedEntry + "\n" + editEntry + "\n").write(
+            to: PunctuationLearning.trainingLogURL,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        PunctuationLearning.rebuildPolicyFromLog()
+        let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+            input: .period,
+            previousWord: "zrebuildprev",
+            nextWord: "zrebuildnext",
             clauseFirst: "alpha",
             shaped: false
         )
-        guard vote == nil else {
-            print("FAIL: ledger replay counted learned decisions as independent evidence")
+        guard preferred == PunctuationLearning.BoundaryLabel.none else {
+            print("FAIL: correction policy rebuild did not recover post-edit evidence: \(String(describing: preferred))")
             exit(EXIT_FAILURE)
         }
     }

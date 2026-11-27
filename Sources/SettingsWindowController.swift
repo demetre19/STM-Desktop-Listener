@@ -613,7 +613,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         stack.addArrangedSubview(polishFieldRow("Learning", control: learningRow))
 
         let learningHint = label(
-            "Dictations are logged to a decision ledger and sentence-level patterns are distilled into punctuation-policy.json — both next to config.json. Audits can read or rewrite them directly; clearing deletes the ledger and every learned pattern.",
+            "Dictations are logged locally to a decision ledger. When you edit pasted text, matching punctuation boundaries are distilled into punctuation-correction-policy.json next to config.json; clearing deletes the ledger and every learned pattern.",
             font: .systemFont(ofSize: 11)
         )
         learningHint.textColor = SettingsPalette.muted
@@ -1600,9 +1600,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func revealPunctuationLearningData() {
-        PunctuationLearning.Policy.shared.flush()
+        PunctuationLearning.CorrectionPolicy.shared.flush()
         var urls = [
-            PunctuationLearning.Policy.storeURL,
+            PunctuationLearning.CorrectionPolicy.storeURL,
             PunctuationLearning.trainingLogURL,
         ].filter { FileManager.default.fileExists(atPath: $0.path) }
         if urls.isEmpty {

@@ -24,6 +24,33 @@ enum PunctuationLearning {
         var learned: Bool      // a policy vote (not heuristics) decided this
     }
 
+    /// Multiclass boundary outcome learned from user corrections. `none` means no punctuation
+    /// at the boundary; newline is recorded but conservatively never auto-inserted.
+    enum BoundaryLabel: String, CaseIterable {
+        case none, comma, period, question, exclamation, newline, other
+
+        var replacementText: String? {
+            switch self {
+            case .none: return ""
+            case .comma: return ","
+            case .period: return "."
+            case .question: return "?"
+            case .exclamation: return "!"
+            case .newline, .other: return nil
+            }
+        }
+    }
+
+    struct CorrectionObservation {
+        var input: BoundaryLabel
+        var desired: BoundaryLabel
+        var previous: String
+        var next: String
+        var clauseFirst: String
+        var shaped: Bool
+        var weight: Int
+    }
+
     /// Mutable decision collector for a single dictation.
     final class Trace {
         private(set) var decisions: [GapDecision] = []
@@ -32,20 +59,18 @@ enum PunctuationLearning {
         }
     }
 
-    /// Learned per-user statistics over gap contexts. Wrong = merged or demoted.
-    final class Policy {
-        static let shared = Policy()
+    /// Correction-grounded multiclass boundary policy. Unlike `Policy`, this store is fed only
+    /// by pasted→final user corrections, never by the system's own heuristic decisions.
+    final class CorrectionPolicy {
+        static let shared = CorrectionPolicy()
 
-        /// Dedicated, LLM-auditable store — deliberately NOT inside config.json, which holds
-        /// the transcription token. Plain JSON: each sentence-signature key maps to
-        /// "keep,wrong" counts so a model can read, rewrite, or prune it directly.
         static let storeURL = AppPaths.applicationSupport
-            .appendingPathComponent("punctuation-policy.json")
+            .appendingPathComponent("punctuation-correction-policy.json")
         private static let maxKeys = 4000
         private static let saveDelay: TimeInterval = 30
 
         private let lock = NSLock()
-        private var stats: [String: (keep: Int, wrong: Int)] = [:]
+        private var stats: [String: [BoundaryLabel: Int]] = [:]
         private var insertionOrder: [String] = []
         private var dirty = false
         private var loaded = false
@@ -53,98 +78,64 @@ enum PunctuationLearning {
 
         private init() {}
 
-        /// Learned vote on merging a terminator gap. Returns true = merge, false = keep,
-        /// nil = insufficient evidence (heuristics decide). The key is a sentence-level
-        /// signature — clause opener, flanking words, terminator, and question shape — so
-        /// "…how is it running? the next…" and "Is it running?" are separate patterns even
-        /// though both end on the same word.
-        func vote(
-            terminator: String,
+        /// Conservative learned preference for a boundary. Requires repeated correction mass,
+        /// a dominant winner, and a margin over the next alternative; otherwise nil means the
+        /// deterministic grammar heuristics remain in charge.
+        func preferredLabel(
+            input: BoundaryLabel,
             previousWord: String,
             nextWord: String,
             clauseFirst: String,
             shaped: Bool
-        ) -> Bool? {
-            // Voting is on the paste path. A cold or still-warming policy must abstain rather
-            // than wait while a multi-megabyte ledger is replayed before paste.
+        ) -> BoundaryLabel? {
             guard lock.try() else { return nil }
             defer { lock.unlock() }
-            guard loaded, let entry = stats[key(
+            guard loaded,
+                  let entry = stats[key(
+                      clauseFirst: clauseFirst,
+                      previous: previousWord,
+                      next: nextWord,
+                      input: input,
+                      shaped: shaped
+                  )] else { return nil }
+            let ranked = entry
+                .filter { $0.value > 0 }
+                .sorted { lhs, rhs in
+                    if lhs.value != rhs.value { return lhs.value > rhs.value }
+                    return lhs.key.rawValue < rhs.key.rawValue
+                }
+            guard let winner = ranked.first else { return nil }
+            let runnerUp = ranked.dropFirst().first?.value ?? 0
+            let total = ranked.reduce(0) { $0 + $1.value }
+            guard total >= 3,
+                  winner.value >= 3,
+                  winner.value >= runnerUp + 2,
+                  Double(winner.value) / Double(total) >= 0.75 else { return nil }
+            return winner.key
+        }
+
+        func observe(
+            input: BoundaryLabel,
+            desired: BoundaryLabel,
+            previousWord: String,
+            nextWord: String,
+            clauseFirst: String,
+            shaped: Bool,
+            weight: Int
+        ) {
+            guard weight > 0 else { return }
+            lock.lock()
+            defer { lock.unlock() }
+            loadLocked()
+            let k = key(
                 clauseFirst: clauseFirst,
                 previous: previousWord,
                 next: nextWord,
-                terminator: terminator,
+                input: input,
                 shaped: shaped
-            )] else { return nil }
-            let total = entry.keep + entry.wrong
-            guard total >= 6 else { return nil }
-            let wrongShare = Double(entry.wrong) / Double(total)
-            if terminator == "." {
-                // Periods are the least harmful terminator; demand stronger evidence.
-                if total >= 12, wrongShare >= 0.95 { return true }
-                if entry.keep > entry.wrong * 3 { return false }
-                return nil
-            }
-            if wrongShare >= 0.85 { return true }
-            if entry.keep > entry.wrong * 3 { return false }
-            return nil
-        }
-
-        /// Loads the policy once in the caller's background context. Dictation startup uses
-        /// this so paste-time votes usually see an already-loaded store.
-        func warm() {
-            lock.lock()
-            defer { lock.unlock() }
-            loadLocked()
-        }
-
-        /// Records an observed decision outcome for future votes. Policy-driven decisions are
-        /// not independent evidence: counting them again would make the learner reinforce its
-        /// own guesses instead of learning from recognizer/model behavior or user corrections.
-        func observe(_ decision: GapDecision) {
-            guard !decision.learned, !decision.terminator.isEmpty else { return }
-            lock.lock()
-            defer { lock.unlock() }
-            loadLocked()
-            observeLocked(decision)
-        }
-
-        private func observeLocked(_ decision: GapDecision) {
-            guard !decision.learned, !decision.terminator.isEmpty else { return }
-            var wrong = false
-            switch decision.action {
-            case "keep":
-                break
-            case "merge", "demote", "space":
-                wrong = true
-            default:
-                return // promotions don't inform the merge prior
-            }
-            accumulate(key(
-                clauseFirst: decision.clauseFirst,
-                previous: decision.previous,
-                next: decision.next,
-                terminator: decision.terminator,
-                shaped: decision.shaped
-            ), wrong: wrong)
-        }
-
-        /// Sentence-level signature: clause opener | preceding word | following word
-        /// ("$" at end of clause) | terminator | question shape. Human- and LLM-readable.
-        private func key(
-            clauseFirst: String,
-            previous: String,
-            next: String,
-            terminator: String,
-            shaped: Bool
-        ) -> String {
-            [clauseFirst, previous, next.isEmpty ? "$" : next, terminator, shaped ? "q" : "s"]
-                .joined(separator: "|")
-        }
-
-        private func accumulate(_ k: String, wrong: Bool) {
-            var entry = stats[k] ?? (0, 0)
-            if wrong { entry.wrong += 1 } else { entry.keep += 1 }
+            )
+            var entry = stats[k] ?? [:]
+            entry[desired, default: 0] += weight
             if stats[k] == nil {
                 insertionOrder.append(k)
                 while insertionOrder.count > Self.maxKeys {
@@ -157,15 +148,12 @@ enum PunctuationLearning {
             scheduleSaveLocked()
         }
 
-        private func scheduleSaveLocked() {
-            guard !savePending else { return }
-            savePending = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.saveDelay) { [weak self] in
-                self?.flush()
-            }
+        func warm() {
+            lock.lock()
+            defer { lock.unlock() }
+            loadLocked()
         }
 
-        /// Persists accumulated stats; safe to call on termination.
         func flush() {
             lock.lock()
             defer { lock.unlock() }
@@ -175,8 +163,6 @@ enum PunctuationLearning {
             saveLocked()
         }
 
-        /// Erases every learned statistic and deletes the store file. The decision log is a
-        /// separate artifact; callers that want a full reset remove it too.
         func clearAll() {
             lock.lock()
             defer { lock.unlock() }
@@ -188,35 +174,48 @@ enum PunctuationLearning {
             try? FileManager.default.removeItem(at: Self.storeURL)
         }
 
+        private func key(
+            clauseFirst: String,
+            previous: String,
+            next: String,
+            input: BoundaryLabel,
+            shaped: Bool
+        ) -> String {
+            [clauseFirst, previous, next.isEmpty ? "$" : next, input.rawValue, shaped ? "q" : "s"]
+                .joined(separator: "|")
+        }
+
+        private func scheduleSaveLocked() {
+            guard !savePending else { return }
+            savePending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.saveDelay) { [weak self] in
+                self?.flush()
+            }
+        }
+
         private func loadLocked() {
             guard !loaded else { return }
             loaded = true
-            // One-time cleanup: pre-release stats lived in config.json under
-            // `dictation.punctuationPolicy` (which also holds the auth token). Word-level
-            // keys are obsolete — the decision log replays into the sentence-level store
-            // via rebuildPolicyFromLog, so the legacy key is simply removed.
-            try? ConfigStore.remove("dictation.punctuationPolicy")
             guard let data = try? Data(contentsOf: Self.storeURL),
-                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: String]
-            else {
-                // Cold start with an existing ledger: replay it so sentence-level stats are
-                // seeded from everything already logged.
-                for decision in PunctuationLearning.loggedDecisions() {
-                    observeLocked(decision)
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Int]]
+            else { return }
+            for (k, rawEntry) in dict {
+                var entry: [BoundaryLabel: Int] = [:]
+                for (rawLabel, count) in rawEntry {
+                    guard let label = BoundaryLabel(rawValue: rawLabel), count > 0 else { continue }
+                    entry[label] = count
                 }
-                saveLocked()
-                return
-            }
-            for (k, v) in dict {
-                let parts = v.split(separator: ",").compactMap { Int($0) }
-                guard parts.count == 2 else { continue }
-                stats[k] = (parts[0], parts[1])
+                guard !entry.isEmpty else { continue }
+                stats[k] = entry
                 insertionOrder.append(k)
             }
         }
 
         private func saveLocked() {
-            let serialized = stats.mapValues { "\($0.keep),\($0.wrong)" }
+            var serialized: [String: [String: Int]] = [:]
+            for (k, entry) in stats {
+                serialized[k] = Dictionary(uniqueKeysWithValues: entry.map { ($0.key.rawValue, $0.value) })
+            }
             guard let data = try? JSONSerialization.data(
                 withJSONObject: serialized,
                 options: [.sortedKeys, .prettyPrinted]
@@ -239,7 +238,7 @@ enum PunctuationLearning {
     /// both app launch and the final paste path.
     static func warm() {
         logQueue.async {
-            Policy.shared.warm()
+            CorrectionPolicy.shared.warm()
         }
     }
 
@@ -267,11 +266,9 @@ enum PunctuationLearning {
             },
         ]
         logQueue.async {
-            // Policy loading and ledger replay can touch multi-megabyte local files. They must
-            // never sit between transcription completion and paste.
-            for decision in decisions {
-                Policy.shared.observe(decision)
-            }
+            // The ledger is an audit/rebuild artifact, not a label source. System decisions are
+            // deliberately not fed back into a policy: deterministic heuristics would otherwise
+            // vote for themselves until their own output looked like user truth.
             appendLogLine(payload)
         }
     }
@@ -319,11 +316,189 @@ enum PunctuationLearning {
         return newText.contains(prefix) || newText.contains(suffix)
     }
 
+    private struct CorrectionWord {
+        var text: String
+        var start: Int
+        var end: Int
+    }
+
+    private static let correctionWordExpression = try? NSRegularExpression(pattern: "[\\p{L}\\p{N}]+")
+
+    private static func correctionWords(in text: String) -> [CorrectionWord] {
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        return correctionWordExpression?.matches(in: text, range: range).map { match in
+            CorrectionWord(
+                text: nsText.substring(with: match.range).lowercased(),
+                start: match.range.location,
+                end: match.range.location + match.range.length
+            )
+        } ?? []
+    }
+
+    static func boundaryLabel(for gap: String) -> BoundaryLabel {
+        if gap.rangeOfCharacter(from: .newlines) != nil { return .newline }
+        if gap.contains("?") { return .question }
+        if gap.contains("!") { return .exclamation }
+        if gap.contains(".") || gap.contains("…") { return .period }
+        if gap.contains(",") { return .comma }
+        if gap.rangeOfCharacter(from: .punctuationCharacters) != nil { return .other }
+        return .none
+    }
+
+    static func inputLabel(for decision: GapDecision) -> BoundaryLabel {
+        if !decision.terminator.isEmpty {
+            return boundaryLabel(for: decision.terminator)
+        }
+        // Comma decisions carry an empty terminator because commas are sentence-medial rather
+        // than terminators. They are the only punctuation-bearing decision kind with no term.
+        return .comma
+    }
+
+    private static func gapTexts(words: [CorrectionWord], in text: String) -> (interior: [String], terminal: String) {
+        let nsText = text as NSString
+        var interior: [String] = []
+        guard words.count > 1 else {
+            let end = words.first?.end ?? 0
+            return ([], end < nsText.length ? nsText.substring(from: end) : "")
+        }
+        for index in 0..<(words.count - 1) {
+            let range = NSRange(location: words[index].end, length: words[index + 1].start - words[index].end)
+            interior.append(nsText.substring(with: range))
+        }
+        let end = words[words.count - 1].end
+        return (interior, end < nsText.length ? nsText.substring(from: end) : "")
+    }
+
+    private static func pastedClauseFirst(
+        boundaryIndex: Int,
+        words: [CorrectionWord],
+        gaps: [String]
+    ) -> String {
+        var start = 0
+        if boundaryIndex > 0 {
+            for gapIndex in stride(from: boundaryIndex - 1, through: 0, by: -1) {
+                if gaps[gapIndex].range(of: "[.!?…\\n]", options: .regularExpression) != nil {
+                    start = gapIndex + 1
+                    break
+                }
+            }
+        }
+        return words[start].text
+    }
+
+    /// Converts a pasted→final correction into conservative boundary supervision. It trains only
+    /// when every word is unchanged (case-insensitively): then any punctuation delta is unambiguous.
+    /// Changed boundaries count three times; punctuation the user actively left unchanged counts once.
+    static func correctionObservations(
+        pasted: String,
+        final: String,
+        decisions: [GapDecision]
+    ) -> [CorrectionObservation] {
+        let pastedWords = correctionWords(in: pasted)
+        let finalWords = correctionWords(in: final)
+        guard !pastedWords.isEmpty,
+              pastedWords.count == finalWords.count,
+              zip(pastedWords, finalWords).allSatisfy({ $0.text == $1.text })
+        else { return [] }
+
+        let pastedGaps = gapTexts(words: pastedWords, in: pasted)
+        let finalGaps = gapTexts(words: finalWords, in: final)
+        var observations: [CorrectionObservation] = []
+        var seen: Set<String> = []
+
+        func appendObservation(
+            boundaryIndex: Int,
+            pastedGap: String,
+            finalGap: String,
+            decision: GapDecision
+        ) {
+            guard !pastedGap.contains("\u{FE00}"), !finalGap.contains("\u{FE00}") else { return }
+            let emitted = boundaryLabel(for: pastedGap)
+            let desired = boundaryLabel(for: finalGap)
+            let input = inputLabel(for: decision)
+            let signature = [
+                String(boundaryIndex), input.rawValue, desired.rawValue,
+                decision.previous, decision.next, decision.clauseFirst, String(decision.shaped)
+            ].joined(separator: "|")
+            guard seen.insert(signature).inserted else { return }
+            observations.append(.init(
+                input: input,
+                desired: desired,
+                previous: decision.previous,
+                next: decision.next,
+                clauseFirst: decision.clauseFirst,
+                shaped: decision.shaped,
+                weight: emitted == desired ? 1 : 3
+            ))
+        }
+
+        for decision in decisions {
+            if decision.next.isEmpty {
+                let boundaryIndex = pastedWords.count - 1
+                guard pastedWords[boundaryIndex].text == decision.previous.lowercased(),
+                      pastedClauseFirst(boundaryIndex: boundaryIndex, words: pastedWords, gaps: pastedGaps.interior) == decision.clauseFirst.lowercased()
+                else { continue }
+                appendObservation(
+                    boundaryIndex: boundaryIndex,
+                    pastedGap: pastedGaps.terminal,
+                    finalGap: finalGaps.terminal,
+                    decision: decision
+                )
+                continue
+            }
+
+            for boundaryIndex in 0..<(pastedWords.count - 1) {
+                guard pastedWords[boundaryIndex].text == decision.previous.lowercased(),
+                      pastedWords[boundaryIndex + 1].text == decision.next.lowercased(),
+                      pastedClauseFirst(boundaryIndex: boundaryIndex, words: pastedWords, gaps: pastedGaps.interior) == decision.clauseFirst.lowercased()
+                else { continue }
+                appendObservation(
+                    boundaryIndex: boundaryIndex,
+                    pastedGap: pastedGaps.interior[boundaryIndex],
+                    finalGap: finalGaps.interior[boundaryIndex],
+                    decision: decision
+                )
+                break
+            }
+        }
+        return observations
+    }
+
+    private static func parseDecisions(_ decisions: [[String: Any]]) -> [GapDecision] {
+        decisions.compactMap { raw in
+            guard let action = raw["action"] as? String else { return nil }
+            return GapDecision(
+                gap: raw["gap"] as? String ?? "model",
+                terminator: raw["term"] as? String ?? "",
+                previous: raw["prev"] as? String ?? "",
+                next: raw["next"] as? String ?? "",
+                clauseFirst: raw["clause"] as? String ?? "",
+                shaped: raw["shaped"] as? Bool ?? false,
+                action: action,
+                learned: raw["learned"] as? Bool ?? false
+            )
+        }
+    }
+
+    private static func loggedDecisions(forAccepted accepted: String) -> [GapDecision] {
+        guard let data = try? Data(contentsOf: trainingLogURL),
+              let text = String(data: data, encoding: .utf8)
+        else { return [] }
+        for line in text.split(separator: "\n").reversed() {
+            guard let entry = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  entry["accepted"] as? String == accepted,
+                  let decisions = entry["decisions"] as? [[String: Any]]
+            else { continue }
+            return parseDecisions(decisions)
+        }
+        return []
+    }
+
     /// Records the user's own in-place correction to a pasted dictation: the
     /// text we pasted versus what was finally left in the field. Written as a
-    /// decision-free ledger entry so `rebuildPolicyFromLog`/`loggedDecisions`
-    /// skip it, while audits and future trainers can mine source→final pairs
-    /// (the "what it ends with" signal the model never sees).
+    /// decision-free ledger entry. Rebuilds mine these source→final pairs as the
+    /// user-truth labels that system decisions themselves cannot provide.
     static func recordPostEdit(pasted: String, final: String) {
         guard !pasted.isEmpty, !final.isEmpty, pasted != final else { return }
         let payload: [String: Any] = [
@@ -335,47 +510,64 @@ enum PunctuationLearning {
         ]
         logQueue.async {
             appendLogLine(payload)
+            let decisions = loggedDecisions(forAccepted: pasted)
+            let observations = correctionObservations(pasted: pasted, final: final, decisions: decisions)
+            for observation in observations {
+                CorrectionPolicy.shared.observe(
+                    input: observation.input,
+                    desired: observation.desired,
+                    previousWord: observation.previous,
+                    nextWord: observation.next,
+                    clauseFirst: observation.clauseFirst,
+                    shaped: observation.shaped,
+                    weight: observation.weight
+                )
+            }
+            Logger.log("post-edit training observations=\(observations.count)")
         }
     }
 
-    /// Re-distills the policy from the decision ledger — e.g. after an LLM audit edits the
-    /// log, or after a policy file is corrupted or cleared. Replays every recorded decision
-    /// as if it were observed live.
+    /// Rebuilds correction-grounded stats from surviving pasted→final ledger pairs. System
+    /// decisions are used only to recover boundary context; they are never labels themselves.
     static func rebuildPolicyFromLog() {
-        Policy.shared.clearAll()
-        let decisions = loggedDecisions()
-        for decision in decisions {
-            Policy.shared.observe(decision)
-        }
-        Policy.shared.flush()
-        Logger.log("punctuation policy rebuilt from log decisions=\(decisions.count)")
-    }
-
-    /// Decisions from the ledger, oldest first. Used to seed or rebuild the policy.
-    static func loggedDecisions() -> [GapDecision] {
+        CorrectionPolicy.shared.clearAll()
         guard let data = try? Data(contentsOf: trainingLogURL),
               let text = String(data: data, encoding: .utf8)
-        else { return [] }
-        var result: [GapDecision] = []
+        else {
+            Logger.log("punctuation correction policy rebuilt from log observations=0")
+            return
+        }
+        var decisionsByAccepted: [String: [GapDecision]] = [:]
+        var observationCount = 0
         for line in text.split(separator: "\n") {
-            guard let entry = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  let decisions = entry["decisions"] as? [[String: Any]]
+            guard let entry = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
             else { continue }
-            for raw in decisions {
-                guard let action = raw["action"] as? String else { continue }
-                result.append(.init(
-                    gap: raw["gap"] as? String ?? "model",
-                    terminator: raw["term"] as? String ?? "",
-                    previous: raw["prev"] as? String ?? "",
-                    next: raw["next"] as? String ?? "",
-                    clauseFirst: raw["clause"] as? String ?? "",
-                    shaped: raw["shaped"] as? Bool ?? false,
-                    action: action,
-                    learned: raw["learned"] as? Bool ?? false
-                ))
+            if let accepted = entry["accepted"] as? String,
+               let decisions = entry["decisions"] as? [[String: Any]] {
+                decisionsByAccepted[accepted] = parseDecisions(decisions)
+                continue
+            }
+            guard entry["kind"] as? String == "postEdit",
+                  let pasted = entry["pasted"] as? String,
+                  let final = entry["final"] as? String,
+                  let decisions = decisionsByAccepted[pasted]
+            else { continue }
+            let observations = correctionObservations(pasted: pasted, final: final, decisions: decisions)
+            observationCount += observations.count
+            for observation in observations {
+                CorrectionPolicy.shared.observe(
+                    input: observation.input,
+                    desired: observation.desired,
+                    previousWord: observation.previous,
+                    nextWord: observation.next,
+                    clauseFirst: observation.clauseFirst,
+                    shaped: observation.shaped,
+                    weight: observation.weight
+                )
             }
         }
-        return result
+        CorrectionPolicy.shared.flush()
+        Logger.log("punctuation correction policy rebuilt from log observations=\(observationCount)")
     }
 
     /// Full reset: learned stats, policy file, and the decision ledger.
@@ -383,7 +575,7 @@ enum PunctuationLearning {
         // Records are serialized on logQueue. Clearing on that queue prevents already queued
         // dictations from repopulating the policy or ledger after the user asked for a reset.
         logQueue.sync {
-            Policy.shared.clearAll()
+            CorrectionPolicy.shared.clearAll()
             try? FileManager.default.removeItem(at: trainingLogURL)
         }
         Logger.log("punctuation learning data cleared")
