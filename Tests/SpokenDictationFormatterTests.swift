@@ -479,6 +479,24 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 8) cases passed")
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .none,
+            desired: .period,
+            previousWord: "zstop",
+            nextWord: "zresume",
+            clauseFirst: "zcase",
+            shaped: false,
+            weight: 3
+        )
+        let sentenceInsertionActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zcase zstop zresume finish.",
+            to: "Zcase zstop zresume finish."
+        )
+        guard sentenceInsertionActual == "Zcase zstop. Zresume finish." else {
+            print("FAIL: learned sentence insertion did not capitalize following word: \(String(reflecting: sentenceInsertionActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 9) cases passed")
     }
 }

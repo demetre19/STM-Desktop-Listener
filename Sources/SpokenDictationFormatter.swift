@@ -461,6 +461,7 @@ enum SpokenDictationFormatter {
         }
 
         let result = NSMutableString(capacity: candidate.count)
+        var learnedSentenceStartWords: Set<Int> = []
 
         let sourcePrefixRange = NSRange(location: 0, length: sourceWords[0].range.location)
         result.append(sourceText.substring(with: sourcePrefixRange))
@@ -529,6 +530,9 @@ enum SpokenDictationFormatter {
                                   in: sourceText,
                                   trace: trace
                               ) {
+                        if let first = inserted.first, ".?!".contains(first) {
+                            learnedSentenceStartWords.insert(index + 1)
+                        }
                         result.append(inserted)
                     } else {
                         result.append(gap)
@@ -538,7 +542,11 @@ enum SpokenDictationFormatter {
                 }
             }
 
-            result.append(candidateWordText(for: index + 1, sourceWords: sourceWords, candidateWords: candidateWords, anchors: anchors))
+            var nextWordText = candidateWordText(for: index + 1, sourceWords: sourceWords, candidateWords: candidateWords, anchors: anchors)
+            if learnedSentenceStartWords.contains(index + 1), let first = nextWordText.first {
+                nextWordText = String(first).uppercased() + String(nextWordText.dropFirst())
+            }
+            result.append(nextWordText)
         }
 
         let sourceSuffixRange = NSRange(
