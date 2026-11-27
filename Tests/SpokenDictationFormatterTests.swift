@@ -11,6 +11,7 @@ struct SpokenDictationFormatterTests {
             ("comma", "Hello comma world", "Hello, world"),
             ("sentence punctuation", "Are you there question mark Yes exclamation point", "Are you there? Yes!"),
             ("new line", "First line new line Second line", "First line\nSecond line"),
+            ("quiet marker does not split new line command", "First line new\u{200B} line Second line", "First line\nSecond line"),
             ("newline", "First line newline Second line", "First line\nSecond line"),
             ("go to a new line", "First line go to a new line Second line", "First line\nSecond line"),
             ("start a new line", "First line start a new line Second line", "First line\nSecond line"),
@@ -180,6 +181,12 @@ struct SpokenDictationFormatterTests {
                 "please use C++",
                 "Please use C.",
                 "Please use C++."
+            ),
+            (
+                "meaningful interior symbols survive model normalization",
+                "please use c++ templates today",
+                "Please use c templates today.",
+                "Please use c++ templates today."
             ),
             (
                 "identical fallback text does not duplicate trailing symbols",
@@ -572,6 +579,42 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 14) cases passed")
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .none,
+            desired: .comma,
+            previousWord: "c",
+            nextWord: "templates",
+            clauseFirst: "please",
+            shaped: false,
+            weight: 3
+        )
+        let symbolInsertionActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Please use c templates today.",
+            to: "please use c++ templates today"
+        )
+        guard symbolInsertionActual == "Please use c++, templates today." else {
+            print("FAIL: learned insertion erased interior symbols: \(String(reflecting: symbolInsertionActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .none,
+            desired: .comma,
+            previousWord: "zshapeadd",
+            nextWord: "zshapenext",
+            clauseFirst: "zshape",
+            shaped: true,
+            weight: 3
+        )
+        let shapeFallbackActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zshape zshapeadd zshapenext finish.",
+            to: "Zshape zshapeadd zshapenext finish."
+        )
+        guard shapeFallbackActual == "Zshape zshapeadd, zshapenext finish." else {
+            print("FAIL: insertion evidence was dropped when heuristic shape bucket changed: \(String(reflecting: shapeFallbackActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 17) cases passed")
     }
 }

@@ -498,6 +498,16 @@ enum SpokenDictationFormatter {
             }
         }
 
+        func trailingSymbolRun(in gap: String) -> String {
+            var symbols = ""
+            for character in gap {
+                if character.isWhitespace { break }
+                if String(character) == prosodyMarker || String(character) == spokenMarker { continue }
+                symbols.append(character)
+            }
+            return symbols
+        }
+
         let sourcePrefixRange = NSRange(location: 0, length: sourceWords[0].range.location)
         result.append(sourceText.substring(with: sourcePrefixRange))
         result.append(candidateWordText(for: 0, sourceWords: sourceWords, candidateWords: candidateWords, anchors: anchors))
@@ -570,9 +580,10 @@ enum SpokenDictationFormatter {
                         if let first = inserted.first, ".?!".contains(first) {
                             learnedSentenceStartWords.insert(index + 1)
                         }
-                        result.append(inserted)
+                        result.append(trailingSymbolRun(in: sourceGap) + inserted)
                     } else {
-                        result.append(gap)
+                        let symbols = trailingSymbolRun(in: sourceGap)
+                        result.append((!symbols.isEmpty && !gap.hasPrefix(symbols) ? symbols : "") + gap)
                     }
                 } else {
                     result.append(" ")
@@ -630,7 +641,7 @@ enum SpokenDictationFormatter {
 
         // Clause-shape analysis walks the preceding clause, so first cheaply test both shape
         // buckets; only a plausible correction context pays for that scan.
-        var plausible = false
+        var evidencedShape: Bool?
         for probeShape in [false, true] {
             if PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
                 input: .none,
@@ -639,19 +650,32 @@ enum SpokenDictationFormatter {
                 clauseFirst: clauseFirst,
                 shaped: probeShape
             ) != nil {
-                plausible = true
+                evidencedShape = probeShape
                 break
             }
         }
-        guard plausible else { return nil }
+        guard evidencedShape != nil else { return nil }
         let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: text)
-        guard let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+        var preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
             input: .none,
             previousWord: previousWord,
             nextWord: nextWord,
             clauseFirst: clauseFirst,
             shaped: shaped
-        ), let replacement = preferred.replacementText, !replacement.isEmpty else { return nil }
+        )
+        // Earlier learned breaks can change the mechanical question-shape bucket between
+        // training and the next dictation. Shape is a heuristic, so use the evidenced bucket
+        // as a final exact-context backoff rather than dropping the correction entirely.
+        if preferred == nil, let evidencedShape, evidencedShape != shaped {
+            preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: .none,
+                previousWord: previousWord,
+                nextWord: nextWord,
+                clauseFirst: clauseFirst,
+                shaped: evidencedShape
+            )
+        }
+        guard let preferred, let replacement = preferred.replacementText, !replacement.isEmpty else { return nil }
         trace?.record(.init(
             gap: "none",
             terminator: "",
@@ -1358,7 +1382,10 @@ enum SpokenDictationFormatter {
     }
 
     private static func escapedPhrase(_ phrase: String) -> String {
-        NSRegularExpression.escapedPattern(for: phrase).replacingOccurrences(of: "\\ ", with: "\\s+")
+        NSRegularExpression.escapedPattern(for: phrase).replacingOccurrences(
+            of: " ",
+            with: "(?:\\s|\u{200B})+"
+        )
     }
 
     private static func phrasePattern(_ phrase: String) -> String {
