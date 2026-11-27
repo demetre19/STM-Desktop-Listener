@@ -443,7 +443,7 @@ enum SpokenDictationFormatter {
             return candidateText.substring(with: range)
         }
 
-        let result = NSMutableString()
+        let result = NSMutableString(capacity: candidate.count)
 
         let sourcePrefixRange = NSRange(location: 0, length: sourceWords[0].range.location)
         result.append(sourceText.substring(with: sourcePrefixRange))
