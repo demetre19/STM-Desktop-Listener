@@ -297,6 +297,27 @@ enum PunctuationLearning {
         handle.write(Data((line + "\n").utf8))
     }
 
+    /// Conservative post-edit relatedness check. Punctuation and capitalization edits do not
+    /// change the canonical text at all; whitespace is ignored because accessibility clients
+    /// often normalize it. Long prefix/suffix anchors permit a word-level correction in the
+    /// middle while still rejecting unrelated field contents.
+    static func postEditTextsAppearRelated(pasted: String, final: String) -> Bool {
+        func canonical(_ text: String) -> String {
+            String(String.UnicodeScalarView(text.lowercased().unicodeScalars.filter {
+                CharacterSet.alphanumerics.contains($0)
+            }))
+        }
+        let oldText = canonical(pasted)
+        let newText = canonical(final)
+        guard !oldText.isEmpty, !newText.isEmpty else { return false }
+        if newText.contains(oldText) || oldText.contains(newText) { return true }
+        guard oldText.count >= 12 else { return false }
+        let anchorLength = min(40, max(6, oldText.count / 3))
+        let prefix = oldText.prefix(anchorLength)
+        let suffix = oldText.suffix(anchorLength)
+        return newText.contains(prefix) || newText.contains(suffix)
+    }
+
     /// Records the user's own in-place correction to a pasted dictation: the
     /// text we pasted versus what was finally left in the field. Written as a
     /// decision-free ledger entry so `rebuildPolicyFromLog`/`loggedDecisions`

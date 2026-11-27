@@ -15,6 +15,17 @@ swiftc -parse-as-library \
 
 "$OUT"
 
+LEARNING_OUT="${TMPDIR:-/tmp}/stm-punctuation-learning-tests"
+swiftc -parse-as-library \
+  "$ROOT/Sources/PunctuationLearning.swift" \
+  "$ROOT/Sources/ConfigStore.swift" \
+  "$ROOT/Sources/Logger.swift" \
+  "$ROOT/Tests/LinuxSupport.swift" \
+  "$ROOT/Tests/PunctuationLearningTests.swift" \
+  -o "$LEARNING_OUT"
+
+"$LEARNING_OUT"
+
 swiftc -typecheck -parse-as-library \
   -import-objc-header "$ROOT/Sources/SpeechBridge.h" \
   "$ROOT/Sources/LocalPunctuationService.swift" \
