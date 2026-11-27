@@ -116,6 +116,7 @@ enum ConfigStore {
 
     static func remove(_ key: String) throws {
         var json = read()
+        guard json.keys.contains(key) else { return }
         json.removeValue(forKey: key)
         try write(json)
     }
