@@ -54,10 +54,19 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count + 7) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 8) cases passed")
     }
 
     private static func testCorrectionObservations() {
+        let decayed = PunctuationLearning.decayedBoundaryCounts(
+            [.period: 4.0],
+            elapsedSeconds: PunctuationLearning.correctionEvidenceHalfLifeSeconds
+        )
+        guard abs((decayed[.period] ?? 0) - 2.0) < 0.0001 else {
+            print("FAIL: correction evidence does not decay to half after one half-life: \(decayed)")
+            exit(EXIT_FAILURE)
+        }
+
         let mergeDecision = PunctuationLearning.GapDecision(
             gap: "model", terminator: ".", previous: "say", next: "and",
             clauseFirst: "i", shaped: false, action: "keep", learned: false
@@ -220,6 +229,13 @@ struct PunctuationLearningTests {
         )
         guard preferred == PunctuationLearning.BoundaryLabel.none else {
             print("FAIL: correction policy rebuild did not recover post-edit evidence: \(String(describing: preferred))")
+            exit(EXIT_FAILURE)
+        }
+        guard let policyData = try? Data(contentsOf: PunctuationLearning.CorrectionPolicy.storeURL),
+              let root = try? JSONSerialization.jsonObject(with: policyData) as? [String: Any],
+              root["version"] as? Int == 2,
+              root["entries"] is [String: Any] else {
+            print("FAIL: correction policy did not persist schema-v2 timestamped entries")
             exit(EXIT_FAILURE)
         }
     }

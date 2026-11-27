@@ -96,6 +96,26 @@ enum PunctuationLearning {
         }
     }
 
+    /// Exponential evidence decay. Ninety days is deliberately slow: speech habits are stable,
+    /// but a user who corrects a new pattern is not permanently overridden by ancient history.
+    static let correctionEvidenceHalfLifeSeconds: TimeInterval = 90 * 24 * 60 * 60
+
+    static func decayedBoundaryCounts(
+        _ counts: [BoundaryLabel: Double],
+        elapsedSeconds: TimeInterval
+    ) -> [BoundaryLabel: Double] {
+        guard elapsedSeconds > 0 else { return counts }
+        let factor = pow(0.5, elapsedSeconds / correctionEvidenceHalfLifeSeconds)
+        guard factor < 0.999999 else { return counts }
+        var decayed: [BoundaryLabel: Double] = [:]
+        for (label, count) in counts {
+            let value = count * factor
+            if value >= 0.01 { decayed[label] = value }
+        }
+        return decayed
+    }
+
+    /// Correction-grounded multiclass boundary policy. Unlike `Policy`, this store is fed only
     /// Correction-grounded multiclass boundary policy. Unlike `Policy`, this store is fed only
     /// by pasted→final user corrections, never by the system's own heuristic decisions.
     final class CorrectionPolicy {
@@ -106,8 +126,13 @@ enum PunctuationLearning {
         private static let maxKeys = 12000
         private static let saveDelay: TimeInterval = 30
 
+        private struct Entry {
+            var counts: [BoundaryLabel: Double]
+            var updatedAt: TimeInterval
+        }
+
         private let lock = NSLock()
-        private var stats: [String: [BoundaryLabel: Int]] = [:]
+        private var stats: [String: Entry] = [:]
         private var insertionOrder: [String] = []
         private var dirty = false
         private var loaded = false
@@ -136,7 +161,9 @@ enum PunctuationLearning {
                 shaped: shaped
             )
             for (level, k) in keys.enumerated() {
-                guard let entry = stats[k] else { continue }
+                guard let storedEntry = stats[k] else { continue }
+                let age = Date().timeIntervalSince1970 - storedEntry.updatedAt
+                let entry = PunctuationLearning.decayedBoundaryCounts(storedEntry.counts, elapsedSeconds: age)
                 let ranked = entry
                     .filter { $0.value > 0 }
                     .sorted { lhs, rhs in
@@ -146,7 +173,7 @@ enum PunctuationLearning {
                 guard let winner = ranked.first else { continue }
                 let runnerUp = ranked.dropFirst().first?.value ?? 0
                 let total = ranked.reduce(0) { $0 + $1.value }
-                let requirements = (minimumTotal: 3 + level * 3, margin: 2 + level, share: 0.75 + Double(level) * 0.05)
+                let requirements = (minimumTotal: Double(3 + level * 3), margin: Double(2 + level), share: 0.75 + Double(level) * 0.05)
                 guard total >= requirements.minimumTotal,
                       winner.value >= 3,
                       winner.value >= runnerUp + requirements.margin,
@@ -169,6 +196,7 @@ enum PunctuationLearning {
             lock.lock()
             defer { lock.unlock() }
             loadLocked()
+            let now = Date().timeIntervalSince1970
             for k in backoffKeys(
                 clauseFirst: clauseFirst,
                 previous: previousWord,
@@ -176,8 +204,13 @@ enum PunctuationLearning {
                 input: input,
                 shaped: shaped
             ) {
-                var entry = stats[k] ?? [:]
-                entry[desired, default: 0] += weight
+                var entry = stats[k] ?? Entry(counts: [:], updatedAt: now)
+                entry.counts = PunctuationLearning.decayedBoundaryCounts(
+                    entry.counts,
+                    elapsedSeconds: now - entry.updatedAt
+                )
+                entry.counts[desired, default: 0] += Double(weight)
+                entry.updatedAt = now
                 if stats[k] == nil {
                     insertionOrder.append(k)
                     while insertionOrder.count > Self.maxKeys {
@@ -257,25 +290,64 @@ enum PunctuationLearning {
             guard !loaded else { return }
             loaded = true
             guard let data = try? Data(contentsOf: Self.storeURL),
-                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: [String: Int]]
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return }
-            for (k, rawEntry) in dict {
-                var entry: [BoundaryLabel: Int] = [:]
-                for (rawLabel, count) in rawEntry {
-                    guard let label = BoundaryLabel(rawValue: rawLabel), count > 0 else { continue }
-                    entry[label] = count
+            let now = Date().timeIntervalSince1970
+
+            func appendEntry(_ key: String, counts: [BoundaryLabel: Double], updatedAt: TimeInterval) {
+                guard !counts.isEmpty else { return }
+                stats[key] = Entry(counts: counts, updatedAt: updatedAt)
+                insertionOrder.append(key)
+            }
+
+            if let entries = root["entries"] as? [String: Any] {
+                for (k, value) in entries {
+                    guard let stored = value as? [String: Any],
+                          let rawCounts = stored["counts"] as? [String: Any],
+                          let updatedAt = (stored["updatedAt"] as? NSNumber)?.doubleValue
+                    else { continue }
+                    var counts: [BoundaryLabel: Double] = [:]
+                    for (rawLabel, rawCount) in rawCounts {
+                        guard let label = BoundaryLabel(rawValue: rawLabel),
+                              let count = (rawCount as? NSNumber)?.doubleValue,
+                              count > 0
+                        else { continue }
+                        counts[label] = count
+                    }
+                    appendEntry(k, counts: counts, updatedAt: updatedAt)
                 }
-                guard !entry.isEmpty else { continue }
-                stats[k] = entry
-                insertionOrder.append(k)
+                return
+            }
+
+            // Development-format migration: early unreleased correction stores were direct
+            // integer count maps without timestamps. Treat them as current rather than discarding
+            // user corrections gathered before schema v2 existed.
+            for (k, value) in root {
+                guard let rawCounts = value as? [String: Any] else { continue }
+                var counts: [BoundaryLabel: Double] = [:]
+                for (rawLabel, rawCount) in rawCounts {
+                    guard let label = BoundaryLabel(rawValue: rawLabel),
+                          let count = (rawCount as? NSNumber)?.doubleValue,
+                          count > 0
+                    else { continue }
+                    counts[label] = count
+                }
+                appendEntry(k, counts: counts, updatedAt: now)
             }
         }
 
         private func saveLocked() {
-            var serialized: [String: [String: Int]] = [:]
+            var entries: [String: [String: Any]] = [:]
             for (k, entry) in stats {
-                serialized[k] = Dictionary(uniqueKeysWithValues: entry.map { ($0.key.rawValue, $0.value) })
+                entries[k] = [
+                    "counts": Dictionary(uniqueKeysWithValues: entry.counts.map { ($0.key.rawValue, $0.value) }),
+                    "updatedAt": entry.updatedAt,
+                ]
             }
+            let serialized: [String: Any] = [
+                "version": 2,
+                "entries": entries,
+            ]
             guard let data = try? JSONSerialization.data(
                 withJSONObject: serialized,
                 options: [.sortedKeys, .prettyPrinted]
