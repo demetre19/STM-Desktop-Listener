@@ -40,11 +40,24 @@ enum LocalPunctuationService {
         return .success(String(cString: candidatePointer))
     }
 
+    private static let warmLock = NSLock()
+    private static var warmedModelPaths: Set<String> = []
+
     /// Loads the one-file-per-process sherpa model while the user is still speaking. The C
     /// bridge serializes access, so the later paste path normally finds the model already hot.
+    /// Warm at most once per model directory; repeated dictations must not spend CPU on extra
+    /// inference passes while local transcription may also be running.
     static func warm() {
         DispatchQueue.global(qos: .utility).async {
             guard let modelDirectory = resolvedModelDirectory() else { return }
+            let path = modelDirectory.path
+            warmLock.lock()
+            guard !warmedModelPaths.contains(path) else {
+                warmLock.unlock()
+                return
+            }
+            warmedModelPaths.insert(path)
+            warmLock.unlock()
             _ = punctuationCandidate(for: "warmup", modelDirectory: modelDirectory)
         }
     }
