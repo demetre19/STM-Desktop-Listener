@@ -1364,10 +1364,6 @@ enum SpokenDictationFormatter {
                     return true
                 case "\"":
                     return prefix.contains("\"")
-                case "’":
-                    return prefix.contains("‘")
-                case "'":
-                    return prefix.contains("'")
                 default:
                     return false
                 }

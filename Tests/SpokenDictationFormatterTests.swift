@@ -705,6 +705,15 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 24) cases passed")
+        let contractionApostropheTerminalActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "don't use zjames'",
+            to: "don't use zjames'"
+        )
+        guard contractionApostropheTerminalActual == "don't use zjames'." else {
+            print("FAIL: earlier contraction made a terminal apostrophe look like a quote: \(String(reflecting: contractionApostropheTerminalActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 25) cases passed")
     }
 }
