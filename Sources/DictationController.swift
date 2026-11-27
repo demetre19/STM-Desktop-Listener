@@ -623,12 +623,14 @@ final class DictationController {
         let orderedTranscripts = (1...max(totalChunkCount, currentChunkIndex)).compactMap { index in
             partialTranscripts[index].map { (index: index, text: $0) }
         }
-        let quietBoundaryIndexes = Set(orderedTranscripts.compactMap { item in
-            chunkBoundaryReasons[item.index] == "quiet" ? item.index : nil
+        // joiningChunks indexes its dense input array from zero, while audio chunks are
+        // one-based. Pass positions in the ordered transcript array, not chunk identifiers.
+        let quietBoundaryPositions = Set(orderedTranscripts.enumerated().compactMap { position, item in
+            chunkBoundaryReasons[item.index] == "quiet" ? position : nil
         })
         let rawTranscript = SpokenDictationFormatter.joiningChunks(
             orderedTranscripts.map(\.text),
-            prosodyBoundaryAfter: quietBoundaryIndexes
+            prosodyBoundaryAfter: quietBoundaryPositions
         ).trimmingCharacters(in: .whitespacesAndNewlines)
 
         if rawTranscript.isEmpty {
