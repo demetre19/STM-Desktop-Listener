@@ -948,8 +948,10 @@ enum SpokenDictationFormatter {
         text.unicodeScalars.contains { CharacterSet.punctuationCharacters.contains($0) }
     }
 
+    private static let wordExpression = try? NSRegularExpression(pattern: "[\\p{L}\\p{N}]+")
+
     private static func wordMatches(in text: String) -> [(text: String, range: NSRange)] {
-        guard let expression = try? NSRegularExpression(pattern: "[\\p{L}\\p{N}]+") else { return [] }
+        guard let expression = wordExpression else { return [] }
         let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
         return expression.matches(in: text, range: fullRange).compactMap { match in
             guard let range = Range(match.range, in: text) else { return nil }
