@@ -678,6 +678,15 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 21) cases passed")
+        let bracketedQuestionActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Can you zbracket it)?",
+            to: "can you zbracket it)"
+        )
+        guard bracketedQuestionActual == "Can you zbracket it)?" else {
+            print("FAIL: closing bracket suppressed question terminal insertion: \(String(reflecting: bracketedQuestionActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 22) cases passed")
     }
 }

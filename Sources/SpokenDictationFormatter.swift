@@ -1365,7 +1365,7 @@ enum SpokenDictationFormatter {
         // Commas, semicolons, colons, and closing quotes are already deliberate terminal
         // text. In particular an explicit spoken comma must remain a comma rather than
         // acquiring a learned or question-shaped terminator after it.
-        guard stripped.range(of: #"[,;:…”’"')\]\s]$"#, options: .regularExpression) == nil else {
+        guard stripped.range(of: #"[,;:][”’"')\]]*\s*$"#, options: .regularExpression) == nil else {
             return stripped
         }
 
