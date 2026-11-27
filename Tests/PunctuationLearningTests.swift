@@ -79,7 +79,7 @@ struct PunctuationLearningTests {
         guard mergeObservations.count == 1,
               mergeObservations[0].input == .period,
               mergeObservations[0].desired == .none,
-              mergeObservations[0].weight == 3 else {
+              mergeObservations[0].weight == 4 else {
             print("FAIL: punctuation removal correction was not converted to strong none evidence: \(mergeObservations)")
             exit(EXIT_FAILURE)
         }
@@ -95,7 +95,7 @@ struct PunctuationLearningTests {
         )
         guard questionObservations.count == 1,
               questionObservations[0].desired == .question,
-              questionObservations[0].weight == 3 else {
+              questionObservations[0].weight == 4 else {
             print("FAIL: terminal replacement correction was not converted to question evidence: \(questionObservations)")
             exit(EXIT_FAILURE)
         }
@@ -132,7 +132,7 @@ struct PunctuationLearningTests {
               insertionObservations[0].desired == .comma,
               insertionObservations[0].previous == "zinsert",
               insertionObservations[0].next == "beta",
-              insertionObservations[0].weight == 3 else {
+              insertionObservations[0].weight == 4 else {
             print("FAIL: punctuation insertion correction was not converted to none-input evidence: \(insertionObservations)")
             exit(EXIT_FAILURE)
         }

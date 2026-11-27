@@ -541,7 +541,7 @@ enum PunctuationLearning {
 
     /// Converts a pasted→final correction into conservative boundary supervision. It trains only
     /// when every word is unchanged (case-insensitively): then any punctuation delta is unambiguous.
-    /// Changed boundaries count three times; punctuation the user actively left unchanged counts once.
+    /// Changed boundaries count four times; punctuation the user actively left unchanged counts once.
     static func correctionObservations(
         pasted: String,
         final: String,
@@ -583,7 +583,7 @@ enum PunctuationLearning {
                 next: decision.next,
                 clauseFirst: decision.clauseFirst,
                 shaped: decision.shaped,
-                weight: emitted == desired ? 1 : 3
+                weight: emitted == desired ? 1 : 4
             ))
         }
 
@@ -636,7 +636,7 @@ enum PunctuationLearning {
                     next: pastedWords[boundaryIndex + 1].text,
                     clauseFirst: pastedClauseFirst(boundaryIndex: boundaryIndex, words: pastedWords, gaps: pastedGaps.interior),
                     shaped: pastedClauseIsQuestionShaped(boundaryIndex: boundaryIndex, words: pastedWords, gaps: pastedGaps.interior),
-                    weight: 3
+                    weight: 4
                 ))
             }
         }
