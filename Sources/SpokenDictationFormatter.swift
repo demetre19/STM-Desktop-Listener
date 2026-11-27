@@ -628,8 +628,8 @@ enum SpokenDictationFormatter {
         let nextWord = words[nextIndex].text.lowercased()
         let clauseFirst = words[clauseStart].text.lowercased()
 
-        // Clause-shape analysis uses a regex and is the expensive part of an insertion probe.
-        // First cheaply test both shape buckets; only a plausible correction context pays for it.
+        // Clause-shape analysis walks the preceding clause, so first cheaply test both shape
+        // buckets; only a plausible correction context pays for that scan.
         var plausible = false
         for probeShape in [false, true] {
             if PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
@@ -860,10 +860,11 @@ enum SpokenDictationFormatter {
         if trimmed.contains(",") {
             let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: sourceText)
             let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: sourceText)
-            if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .comma),
+            let commaPreviousWord = words[previousIndex].text.lowercased()
+            if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .comma, previousWord: commaPreviousWord),
                let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
                 input: .comma,
-                previousWord: words[previousIndex].text.lowercased(),
+                previousWord: commaPreviousWord,
                 nextWord: words[nextIndex].text.lowercased(),
                 clauseFirst: words[clauseStart].text.lowercased(),
                 shaped: shaped
