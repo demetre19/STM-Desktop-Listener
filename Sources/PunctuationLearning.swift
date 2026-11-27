@@ -379,8 +379,12 @@ enum PunctuationLearning {
 
     /// Full reset: learned stats, policy file, and the decision ledger.
     static func clearAll() {
-        Policy.shared.clearAll()
-        try? FileManager.default.removeItem(at: trainingLogURL)
+        // Records are serialized on logQueue. Clearing on that queue prevents already queued
+        // dictations from repopulating the policy or ledger after the user asked for a reset.
+        logQueue.sync {
+            Policy.shared.clearAll()
+            try? FileManager.default.removeItem(at: trainingLogURL)
+        }
         Logger.log("punctuation learning data cleared")
     }
 }
