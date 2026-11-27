@@ -1348,6 +1348,13 @@ enum SpokenDictationFormatter {
             ))
         }
 
+        // Commas, semicolons, colons, and closing quotes are already deliberate terminal
+        // text. In particular an explicit spoken comma must remain a comma rather than
+        // acquiring a learned or question-shaped terminator after it.
+        guard stripped.range(of: #"[,;:…”’"')\]\s]$"#, options: .regularExpression) == nil else {
+            return stripped
+        }
+
         let terminalPreviousWord = finalWords.last?.text.lowercased() ?? ""
         var learnedTerminal: PunctuationLearning.BoundaryLabel?
         if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .none, previousWord: terminalPreviousWord) {
@@ -1374,16 +1381,10 @@ enum SpokenDictationFormatter {
             recordInsertedTerminal(false)
             return stripped + "?"
         }
-        if stripped.range(
-            of: #"[,;:…”’"')\]\s]$"#,
-            options: .regularExpression
-        ) == nil {
-            // Recognizer text that ends on a bare word gets a period unless correction evidence
-            // prefers another terminal treatment above.
-            recordInsertedTerminal(false)
-            return stripped + "."
-        }
-        return stripped
+        // Recognizer text that ends on a bare word gets a period unless correction evidence
+        // prefers another terminal treatment above.
+        recordInsertedTerminal(false)
+        return stripped + "."
     }
 
     private static func escapedPhrase(_ phrase: String) -> String {

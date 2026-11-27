@@ -633,6 +633,24 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 18) cases passed")
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .none,
+            desired: .exclamation,
+            previousWord: "zspokenend",
+            nextWord: "",
+            clauseFirst: "use",
+            shaped: false,
+            weight: 3
+        )
+        let spokenTerminalCommaActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Use zspokenend,",
+            to: "use zspokenend,\u{FE00}"
+        )
+        guard spokenTerminalCommaActual == "Use zspokenend," else {
+            print("FAIL: learned terminal insertion appended punctuation after a spoken comma: \(String(reflecting: spokenTerminalCommaActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 19) cases passed")
     }
 }
