@@ -412,28 +412,6 @@ enum SpokenDictationFormatter {
         "almost", "all", "you",
     ]
 
-    private static let questionStarters: Set<String> = [
-        "who", "what", "when", "where", "why", "how", "which", "whose", "whom",
-    ]
-
-    private static let questionAuxiliaries: Set<String> = [
-        "is", "are", "am", "was", "were", "do", "does", "did", "can", "could",
-        "should", "would", "will", "shall", "may", "might", "must", "have",
-        "has", "had",
-    ]
-
-    private static let questionSubjects: Set<String> = [
-        "you", "we", "they", "i", "he", "she", "there", "anyone", "everyone",
-        "somebody", "someone", "everybody", "nobody",
-    ]
-
-    /// Embedded-question verbs only count in their imperative forms ("check if", "find out
-    /// whether", "tell me if"). Statements like "I wonder how", "I know why", and "let's see
-    /// if" are excluded — only command-form embedded questions keep a question mark.
-    private static let embeddedQuestionPattern =
-        "(?i)\\b(?:check|determine|verify)\\s+(?:if|whether|who|what|when|where|why|how|which)\\b"
-        + "|\\b(?:find\\s+out|tell\\s+me)\\s+(?:if|whether)\\b"
-
     private static let sentenceTerminators = CharacterSet(charactersIn: ".!?…\n")
     private static let gapSkippables = CharacterSet(charactersIn: " \t\r\n“”\"'()[]{}\u{FE00}")
 
@@ -520,6 +498,15 @@ enum SpokenDictationFormatter {
                             mergedBoundaryWords.insert(index + 1)
                         }
                         result.append(sanitized)
+                    } else if PunctuationLearning.boundaryLabel(for: gap) == .none,
+                              let inserted = learnedInsertionGap(
+                                  previousIndex: index,
+                                  nextIndex: index + 1,
+                                  words: sourceWords,
+                                  in: sourceText,
+                                  trace: trace
+                              ) {
+                        result.append(inserted)
                     } else {
                         result.append(gap)
                     }
@@ -556,6 +543,37 @@ enum SpokenDictationFormatter {
         }
 
         return result as String
+    }
+
+    /// Correction-grounded insertion for boundaries where neither recognizer nor model proposed
+    /// punctuation. Only exact, repeatedly validated user corrections reach this path.
+    private static func learnedInsertionGap(
+        previousIndex: Int,
+        nextIndex: Int,
+        words: [(text: String, range: NSRange)],
+        in text: NSString,
+        trace: PunctuationLearning.Trace?
+    ) -> String? {
+        let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: text)
+        let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: text)
+        guard let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+            input: .none,
+            previousWord: words[previousIndex].text.lowercased(),
+            nextWord: words[nextIndex].text.lowercased(),
+            clauseFirst: words[clauseStart].text.lowercased(),
+            shaped: shaped
+        ), let replacement = preferred.replacementText, !replacement.isEmpty else { return nil }
+        trace?.record(.init(
+            gap: "none",
+            terminator: "",
+            previous: words[previousIndex].text.lowercased(),
+            next: words[nextIndex].text.lowercased(),
+            clauseFirst: words[clauseStart].text.lowercased(),
+            shaped: shaped,
+            action: "insert",
+            learned: true
+        ))
+        return replacement + " "
     }
 
     private static func candidateWordText(
@@ -939,7 +957,7 @@ enum SpokenDictationFormatter {
     ) -> Bool {
         let start = clauseStartIndex(before: precedingWordIndex, words: words, in: text)
         let clauseWords = (start...precedingWordIndex).map { words[$0].text.lowercased() }
-        return clauseWordsAreQuestionShaped(clauseWords)
+        return PunctuationLearning.clauseWordsAreQuestionShaped(clauseWords)
     }
 
     private static func shouldLowercaseAfterMergedBoundary(_ word: String) -> Bool {
@@ -1091,7 +1109,7 @@ enum SpokenDictationFormatter {
         let stripped = strippingSpokenMarkers(text)
         let questionPatterns = [
             #"(?i)^\s*(?:who|what|when|where|why|how|which|whose|whom|is|are|am|was|were|do|does|did|can|could|should|would|will|have|has|had|may|might|must)\b"#,
-            embeddedQuestionPattern,
+            PunctuationLearning.embeddedQuestionPattern,
         ]
         let finalClause = stripped.split(
             omittingEmptySubsequences: true,
@@ -1102,7 +1120,7 @@ enum SpokenDictationFormatter {
             finalClause.range(of: $0, options: .regularExpression) != nil
         }
         let clauseWords = wordMatches(in: finalClause).map { $0.text.lowercased() }
-        let shaped = regexShaped || clauseWordsAreQuestionShaped(clauseWords)
+        let shaped = regexShaped || PunctuationLearning.clauseWordsAreQuestionShaped(clauseWords)
 
         let finalWords = wordMatches(in: finalClause)
 
@@ -1183,24 +1201,6 @@ enum SpokenDictationFormatter {
             return stripped + "."
         }
         return stripped
-    }
-
-    private static func clauseWordsAreQuestionShaped(_ clauseWords: [String]) -> Bool {
-        guard let first = clauseWords.first else { return false }
-        if questionStarters.contains(first) || questionAuxiliaries.contains(first) {
-            return true
-        }
-        for pair in zip(clauseWords, clauseWords.dropFirst()) {
-            if questionStarters.contains(pair.0), questionAuxiliaries.contains(pair.1) {
-                return true
-            }
-            if questionAuxiliaries.contains(pair.0), questionSubjects.contains(pair.1) {
-                return true
-            }
-        }
-        return clauseWords
-            .joined(separator: " ")
-            .range(of: embeddedQuestionPattern, options: .regularExpression) != nil
     }
 
     private static func escapedPhrase(_ phrase: String) -> String {

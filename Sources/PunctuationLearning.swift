@@ -41,6 +41,43 @@ enum PunctuationLearning {
         }
     }
 
+    private static let questionStarters: Set<String> = [
+        "who", "what", "when", "where", "why", "how", "which", "whose", "whom",
+    ]
+
+    private static let questionAuxiliaries: Set<String> = [
+        "is", "are", "am", "was", "were", "do", "does", "did", "can", "could",
+        "should", "would", "will", "shall", "may", "might", "must", "have",
+        "has", "had",
+    ]
+
+    private static let questionSubjects: Set<String> = [
+        "you", "we", "they", "i", "he", "she", "there", "anyone", "everyone",
+        "somebody", "someone", "everybody", "nobody",
+    ]
+
+    static let embeddedQuestionPattern =
+        "(?i)\\b(?:check|determine|verify)\\s+(?:if|whether|who|what|when|where|why|how|which)\\b"
+        + "|\\b(?:find\\s+out|tell\\s+me)\\s+(?:if|whether)\\b"
+
+    static func clauseWordsAreQuestionShaped(_ clauseWords: [String]) -> Bool {
+        guard let first = clauseWords.first else { return false }
+        if questionStarters.contains(first) || questionAuxiliaries.contains(first) {
+            return true
+        }
+        for pair in zip(clauseWords, clauseWords.dropFirst()) {
+            if questionStarters.contains(pair.0), questionAuxiliaries.contains(pair.1) {
+                return true
+            }
+            if questionAuxiliaries.contains(pair.0), questionSubjects.contains(pair.1) {
+                return true
+            }
+        }
+        return clauseWords
+            .joined(separator: " ")
+            .range(of: embeddedQuestionPattern, options: .regularExpression) != nil
+    }
+
     struct CorrectionObservation {
         var input: BoundaryLabel
         var desired: BoundaryLabel
@@ -350,8 +387,12 @@ enum PunctuationLearning {
         if !decision.terminator.isEmpty {
             return boundaryLabel(for: decision.terminator)
         }
+        if decision.action == "insert" {
+            return .none
+        }
         // Comma decisions carry an empty terminator because commas are sentence-medial rather
-        // than terminators. They are the only punctuation-bearing decision kind with no term.
+        // than terminators. Apart from explicit insertion votes, they are the only
+        // punctuation-bearing decision kind with no term.
         return .comma
     }
 
@@ -370,11 +411,10 @@ enum PunctuationLearning {
         return (interior, end < nsText.length ? nsText.substring(from: end) : "")
     }
 
-    private static func pastedClauseFirst(
+    private static func pastedClauseStart(
         boundaryIndex: Int,
-        words: [CorrectionWord],
         gaps: [String]
-    ) -> String {
+    ) -> Int {
         var start = 0
         if boundaryIndex > 0 {
             for gapIndex in stride(from: boundaryIndex - 1, through: 0, by: -1) {
@@ -384,7 +424,24 @@ enum PunctuationLearning {
                 }
             }
         }
-        return words[start].text
+        return start
+    }
+
+    private static func pastedClauseFirst(
+        boundaryIndex: Int,
+        words: [CorrectionWord],
+        gaps: [String]
+    ) -> String {
+        words[pastedClauseStart(boundaryIndex: boundaryIndex, gaps: gaps)].text
+    }
+
+    private static func pastedClauseIsQuestionShaped(
+        boundaryIndex: Int,
+        words: [CorrectionWord],
+        gaps: [String]
+    ) -> Bool {
+        let start = pastedClauseStart(boundaryIndex: boundaryIndex, gaps: gaps)
+        return clauseWordsAreQuestionShaped((start...boundaryIndex).map { words[$0].text })
     }
 
     /// Converts a pasted→final correction into conservative boundary supervision. It trains only
@@ -406,6 +463,7 @@ enum PunctuationLearning {
         let finalGaps = gapTexts(words: finalWords, in: final)
         var observations: [CorrectionObservation] = []
         var seen: Set<String> = []
+        var decisionBoundaries: Set<Int> = []
 
         func appendObservation(
             boundaryIndex: Int,
@@ -421,6 +479,7 @@ enum PunctuationLearning {
                 String(boundaryIndex), input.rawValue, desired.rawValue,
                 decision.previous, decision.next, decision.clauseFirst, String(decision.shaped)
             ].joined(separator: "|")
+            decisionBoundaries.insert(boundaryIndex)
             guard seen.insert(signature).inserted else { return }
             observations.append(.init(
                 input: input,
@@ -460,6 +519,30 @@ enum PunctuationLearning {
                     decision: decision
                 )
                 break
+            }
+        }
+
+        // Boundaries with no system punctuation proposal normally have no trace decision. Mine
+        // them only when the user inserted punctuation; passive no-punctuation boundaries are
+        // too numerous and too weak to be useful evidence.
+        if pastedWords.count > 1 {
+            for boundaryIndex in 0..<(pastedWords.count - 1) where !decisionBoundaries.contains(boundaryIndex) {
+                let pastedGap = pastedGaps.interior[boundaryIndex]
+                let finalGap = finalGaps.interior[boundaryIndex]
+                guard !pastedGap.contains("\u{FE00}"), !finalGap.contains("\u{FE00}"),
+                      boundaryLabel(for: pastedGap) == .none
+                else { continue }
+                let desired = boundaryLabel(for: finalGap)
+                guard desired != .none else { continue }
+                observations.append(.init(
+                    input: .none,
+                    desired: desired,
+                    previous: pastedWords[boundaryIndex].text,
+                    next: pastedWords[boundaryIndex + 1].text,
+                    clauseFirst: pastedClauseFirst(boundaryIndex: boundaryIndex, words: pastedWords, gaps: pastedGaps.interior),
+                    shaped: pastedClauseIsQuestionShaped(boundaryIndex: boundaryIndex, words: pastedWords, gaps: pastedGaps.interior),
+                    weight: 3
+                ))
             }
         }
         return observations

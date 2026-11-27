@@ -402,6 +402,31 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 3) cases passed")
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: PunctuationLearning.BoundaryLabel.none,
+            desired: .comma,
+            previousWord: "zadd",
+            nextWord: "znext",
+            clauseFirst: "zstart",
+            shaped: false,
+            weight: 3
+        )
+        let insertionTrace = PunctuationLearning.Trace()
+        let insertionActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zstart zadd znext finish.",
+            to: "Zstart zadd znext finish.",
+            trace: insertionTrace
+        )
+        guard insertionActual == "Zstart zadd, znext finish.",
+              insertionTrace.decisions.contains(where: { $0.action == "insert" && $0.learned }) else {
+            print(
+                "FAIL: correction-grounded punctuation insertion missing\n" +
+                    "  actual:   \(String(reflecting: insertionActual))\n" +
+                    "  decisions: \(insertionTrace.decisions)"
+            )
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 4) cases passed")
     }
 }

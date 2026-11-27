@@ -54,7 +54,7 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count + 5) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 6) cases passed")
     }
 
     private static func testCorrectionObservations() {
@@ -110,6 +110,21 @@ struct PunctuationLearningTests {
         )
         guard wordEditObservations.isEmpty else {
             print("FAIL: ambiguous word edit produced punctuation supervision")
+            exit(EXIT_FAILURE)
+        }
+
+        let insertionObservations = PunctuationLearning.correctionObservations(
+            pasted: "Alpha zinsert beta gamma.",
+            final: "Alpha zinsert, beta gamma.",
+            decisions: []
+        )
+        guard insertionObservations.count == 1,
+              insertionObservations[0].input == PunctuationLearning.BoundaryLabel.none,
+              insertionObservations[0].desired == .comma,
+              insertionObservations[0].previous == "zinsert",
+              insertionObservations[0].next == "beta",
+              insertionObservations[0].weight == 3 else {
+            print("FAIL: punctuation insertion correction was not converted to none-input evidence: \(insertionObservations)")
             exit(EXIT_FAILURE)
         }
 
