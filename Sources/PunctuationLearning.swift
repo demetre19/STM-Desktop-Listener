@@ -65,10 +65,11 @@ enum PunctuationLearning {
             clauseFirst: String,
             shaped: Bool
         ) -> Bool? {
-            lock.lock()
+            // Voting is on the paste path. A cold or still-warming policy must abstain rather
+            // than wait while a multi-megabyte ledger is replayed before paste.
+            guard lock.try() else { return nil }
             defer { lock.unlock() }
-            loadLocked()
-            guard let entry = stats[key(
+            guard loaded, let entry = stats[key(
                 clauseFirst: clauseFirst,
                 previous: previousWord,
                 next: nextWord,
@@ -89,9 +90,19 @@ enum PunctuationLearning {
             return nil
         }
 
-        /// Records an observed decision outcome for future votes.
+        /// Loads the policy once in the caller's background context. Dictation startup uses
+        /// this so paste-time votes usually see an already-loaded store.
+        func warm() {
+            lock.lock()
+            defer { lock.unlock() }
+            loadLocked()
+        }
+
+        /// Records an observed decision outcome for future votes. Policy-driven decisions are
+        /// not independent evidence: counting them again would make the learner reinforce its
+        /// own guesses instead of learning from recognizer/model behavior or user corrections.
         func observe(_ decision: GapDecision) {
-            guard !decision.terminator.isEmpty else { return }
+            guard !decision.learned, !decision.terminator.isEmpty else { return }
             lock.lock()
             defer { lock.unlock() }
             loadLocked()
@@ -99,6 +110,7 @@ enum PunctuationLearning {
         }
 
         private func observeLocked(_ decision: GapDecision) {
+            guard !decision.learned, !decision.terminator.isEmpty else { return }
             var wrong = false
             switch decision.action {
             case "keep":
@@ -223,13 +235,18 @@ enum PunctuationLearning {
     static let trainingLogURL = AppPaths.applicationSupport
         .appendingPathComponent("punctuation-training.jsonl")
 
+    /// Starts cold policy loading while audio is still being captured, keeping file replay off
+    /// both app launch and the final paste path.
+    static func warm() {
+        logQueue.async {
+            Policy.shared.warm()
+        }
+    }
+
     /// Feeds one finished dictation into the learner: appends a JSONL record and updates the
     /// policy. Cheap, local, and silent — call right after the final text is produced.
     static func record(engine: String, source: String, accepted: String, trace: Trace) {
         let decisions = trace.decisions
-        for decision in decisions {
-            Policy.shared.observe(decision)
-        }
         let payload: [String: Any] = [
             "schema": 1,
             "date": ISO8601DateFormatter().string(from: Date()),
@@ -250,6 +267,11 @@ enum PunctuationLearning {
             },
         ]
         logQueue.async {
+            // Policy loading and ledger replay can touch multi-megabyte local files. They must
+            // never sit between transcription completion and paste.
+            for decision in decisions {
+                Policy.shared.observe(decision)
+            }
             appendLogLine(payload)
         }
     }
@@ -274,6 +296,27 @@ enum PunctuationLearning {
         defer { try? handle.close() }
         handle.seekToEndOfFile()
         handle.write(Data((line + "\n").utf8))
+    }
+
+    /// Conservative post-edit relatedness check. Punctuation and capitalization edits do not
+    /// change the canonical text at all; whitespace is ignored because accessibility clients
+    /// often normalize it. Long prefix/suffix anchors permit a word-level correction in the
+    /// middle while still rejecting unrelated field contents.
+    static func postEditTextsAppearRelated(pasted: String, final: String) -> Bool {
+        func canonical(_ text: String) -> String {
+            String(String.UnicodeScalarView(text.lowercased().unicodeScalars.filter {
+                CharacterSet.alphanumerics.contains($0)
+            }))
+        }
+        let oldText = canonical(pasted)
+        let newText = canonical(final)
+        guard !oldText.isEmpty, !newText.isEmpty else { return false }
+        if newText.contains(oldText) || oldText.contains(newText) { return true }
+        guard oldText.count >= 12 else { return false }
+        let anchorLength = min(40, max(6, oldText.count / 3))
+        let prefix = oldText.prefix(anchorLength)
+        let suffix = oldText.suffix(anchorLength)
+        return newText.contains(prefix) || newText.contains(suffix)
     }
 
     /// Records the user's own in-place correction to a pasted dictation: the
@@ -337,8 +380,12 @@ enum PunctuationLearning {
 
     /// Full reset: learned stats, policy file, and the decision ledger.
     static func clearAll() {
-        Policy.shared.clearAll()
-        try? FileManager.default.removeItem(at: trainingLogURL)
+        // Records are serialized on logQueue. Clearing on that queue prevents already queued
+        // dictations from repopulating the policy or ledger after the user asked for a reset.
+        logQueue.sync {
+            Policy.shared.clearAll()
+            try? FileManager.default.removeItem(at: trainingLogURL)
+        }
         Logger.log("punctuation learning data cleared")
     }
 }

@@ -142,6 +142,24 @@ enum SpokenDictationFormatter {
         return text
     }
 
+    /// Edge-Punct is trained on whitespace-separated, lowercase, unpunctuated transcript
+    /// words. Feeding recognizer punctuation, casing, newlines, or explicit-command markers
+    /// changes the whitespace tokens themselves and puts the model outside its input contract.
+    /// This projection is only for the model; the original text remains the merge source so
+    /// recognizer punctuation and explicit commands are still preserved as evidence.
+    private static let punctuationModelTrimCharacters: CharacterSet = {
+        var characters = CharacterSet.punctuationCharacters
+        characters.insert(charactersIn: "\u{FE00}")
+        return characters
+    }()
+
+    static func normalizingForPunctuationModel(_ text: String) -> String {
+        text.split(whereSeparator: { $0.isWhitespace }).compactMap { token in
+            let normalized = token.trimmingCharacters(in: punctuationModelTrimCharacters).lowercased()
+            return normalized.isEmpty ? nil : normalized
+        }.joined(separator: " ")
+    }
+
     static func applyingAutomaticPunctuation(
         candidate: String,
         to original: String,
@@ -155,6 +173,9 @@ enum SpokenDictationFormatter {
 
         let sourceWords = wordMatches(in: source)
         let proposedWords = wordMatches(in: proposed)
+        guard !sourceWords.isEmpty, !proposedWords.isEmpty else {
+            return enforcingLikelyQuestionTerminal(in: source, trace: trace)
+        }
         let anchors = alignWords(source: sourceWords, candidate: proposedWords)
 
         // A small mismatch window is tolerated: the model may retokenize contractions or drop
@@ -440,7 +461,7 @@ enum SpokenDictationFormatter {
             return candidateText.substring(with: range)
         }
 
-        let result = NSMutableString()
+        let result = NSMutableString(capacity: candidate.count)
 
         let sourcePrefixRange = NSRange(location: 0, length: sourceWords[0].range.location)
         result.append(sourceText.substring(with: sourcePrefixRange))
@@ -493,9 +514,11 @@ enum SpokenDictationFormatter {
                         nextIndex: right,
                         words: candidateWords,
                         in: candidateText,
-                        mergedBoundaryWords: &mergedBoundaryWords,
                         trace: trace
                     ) {
+                        if sanitized == " ", gap.range(of: "[.!?…]", options: .regularExpression) != nil {
+                            mergedBoundaryWords.insert(index + 1)
+                        }
                         result.append(sanitized)
                     } else {
                         result.append(gap)
@@ -519,7 +542,15 @@ enum SpokenDictationFormatter {
                 location: NSMaxRange(candidateWords.last!.range),
                 length: candidateText.length - NSMaxRange(candidateWords.last!.range)
             )
-            result.append(candidateText.substring(with: candidateSuffixRange))
+            // Symbols such as `++` are not punctuation, but they are still meaningful source
+            // text. Preserve them and then accept the model's terminal punctuation. When the
+            // deterministic fallback uses the same text as source and candidate, do not copy
+            // that shared suffix twice.
+            let candidateSuffix = candidateText.substring(with: candidateSuffixRange)
+            result.append(sourceSuffix)
+            if candidateSuffix != sourceSuffix {
+                result.append(candidateSuffix)
+            }
         } else {
             result.append(sourceSuffix)
         }
@@ -548,7 +579,6 @@ enum SpokenDictationFormatter {
         nextIndex: Int,
         words: [(text: String, range: NSRange)],
         in candidate: NSString,
-        mergedBoundaryWords: inout Set<Int>,
         trace: PunctuationLearning.Trace? = nil
     ) -> String? {
         let trimmed = gap.trimmingCharacters(in: .whitespaces)
@@ -575,7 +605,6 @@ enum SpokenDictationFormatter {
                 in: candidate
             ) {
             case .merge(let learned):
-                mergedBoundaryWords.insert(nextIndex)
                 record("merge", learned: learned)
                 return " "
             case .keep(let learned):
@@ -945,8 +974,10 @@ enum SpokenDictationFormatter {
         text.unicodeScalars.contains { CharacterSet.punctuationCharacters.contains($0) }
     }
 
+    private static let wordExpression = try? NSRegularExpression(pattern: "[\\p{L}\\p{N}]+")
+
     private static func wordMatches(in text: String) -> [(text: String, range: NSRange)] {
-        guard let expression = try? NSRegularExpression(pattern: "[\\p{L}\\p{N}]+") else { return [] }
+        guard let expression = wordExpression else { return [] }
         let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
         return expression.matches(in: text, range: fullRange).compactMap { match in
             guard let range = Range(match.range, in: text) else { return nil }

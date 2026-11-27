@@ -207,6 +207,8 @@ final class DictationController {
 
         resetTranscriptionState()
         activeTranscriptionEngine = localConfiguration.engine
+        PunctuationLearning.warm()
+        LocalPunctuationService.warm()
 
         let engine = AVAudioEngine()
         let input = engine.inputNode
@@ -673,9 +675,9 @@ final class DictationController {
             return
         }
         // Only log when the field actually still contains our pasted text;
-        // otherwise the user typed unrelated content.
-        guard focused.contains(pasted.prefix(min(pasted.count, 32))) ||
-              pasted.contains(focused.prefix(min(focused.count, 32))) else {
+        // otherwise the user typed unrelated content. Punctuation near the start must not
+        // discard the correction, so compare alphanumeric content rather than raw prefixes.
+        guard PunctuationLearning.postEditTextsAppearRelated(pasted: pasted, final: focused) else {
             Logger.log("post-edit skip reason=field-changed pastedChars=\(pasted.count) focusedChars=\(focused.count)")
             return
         }

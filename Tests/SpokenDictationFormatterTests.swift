@@ -1,4 +1,8 @@
+#if canImport(Darwin)
 import Darwin
+#else
+import Glibc
+#endif
 
 @main
 struct SpokenDictationFormatterTests {
@@ -159,6 +163,30 @@ struct SpokenDictationFormatterTests {
                 "Can you see if it works.",
                 "Can you see if it works?"
             ),
+            (
+                "punctuation-only input cannot crash",
+                ".\u{FE00}",
+                ".",
+                "."
+            ),
+            (
+                "model insertion does not shift merged boundary casing",
+                "alpha beta and Gamma",
+                "Alpha beta filler and. Gamma",
+                "Alpha beta and gamma."
+            ),
+            (
+                "meaningful trailing symbols survive model normalization",
+                "please use C++",
+                "Please use C.",
+                "Please use C++."
+            ),
+            (
+                "identical fallback text does not duplicate trailing symbols",
+                "please use C++",
+                "please use C++",
+                "please use C++."
+            ),
         ]
         let substitutionCases: [(name: String, substitutions: [String: String], input: String, expected: String)] = [
             (
@@ -190,6 +218,23 @@ struct SpokenDictationFormatterTests {
                 [:],
                 "nothing changes here",
                 "nothing changes here"
+            ),
+        ]
+        let normalizationCases: [(name: String, input: String, expected: String)] = [
+            (
+                "model input strips punctuation casing newlines and command markers",
+                "How are you?\nI am fine.\u{FE00} MAILGUN",
+                "how are you i am fine mailgun"
+            ),
+            (
+                "model input preserves word order and numbers",
+                "First, SEND 2 copies!",
+                "first send 2 copies"
+            ),
+            (
+                "model input preserves contractions and meaningful symbols",
+                "I don't use C++.",
+                "i don't use c++"
             ),
         ]
         let pipelineCases: [(name: String, input: String, candidate: String, expected: String)] = [
@@ -261,6 +306,18 @@ struct SpokenDictationFormatterTests {
             }
         }
 
+        for testCase in normalizationCases {
+            let actual = SpokenDictationFormatter.normalizingForPunctuationModel(testCase.input)
+            guard actual == testCase.expected else {
+                print(
+                    "FAIL: \(testCase.name)\n" +
+                        "  expected: \(String(reflecting: testCase.expected))\n" +
+                        "  actual:   \(String(reflecting: actual))"
+                )
+                exit(EXIT_FAILURE)
+            }
+        }
+
         for testCase in pipelineCases {
             let commandFormatted = SpokenDictationFormatter.applyingSpokenCommands(to: testCase.input)
             let actual = SpokenDictationFormatter.applyingAutomaticPunctuation(
@@ -277,6 +334,6 @@ struct SpokenDictationFormatterTests {
             }
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count) cases passed")
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count) cases passed")
     }
 }
