@@ -14,6 +14,7 @@ final class DictationController {
         let url: URL
         let deleteAfterUse: Bool
         let retryDepth: Int
+        let durationSeconds: TimeInterval
     }
 
     private enum TranscriptionRequestError: LocalizedError {
@@ -46,10 +47,13 @@ final class DictationController {
     private var currentChunkWriter: AVAudioFile?
     private var currentChunkURL: URL?
     private var currentChunkFrameCount: AVAudioFramePosition = 0
+    private var currentChunkSampleRate = 0.0
     private var currentChunkIndex = 0
 
     private var pendingChunks: [AudioChunk] = []
     private var partialTranscripts: [Int: String] = [:]
+    private var chunkMetadata: [[String: Any]] = []
+    private var chunkBoundaryReasons: [Int: String] = [:]
     private var completedChunkCount = 0
     private var totalChunkCount = 0
     private var finishRequested = false
@@ -263,6 +267,7 @@ final class DictationController {
         let finalChunk = closeCurrentChunkLocked()
         audioLock.unlock()
         if let finalChunk = finalChunk {
+            chunkBoundaryReasons[finalChunk.index] = "final"
             enqueueChunk(finalChunk)
         }
 
@@ -302,6 +307,8 @@ final class DictationController {
         }
         pendingChunks.removeAll()
         partialTranscripts.removeAll()
+        chunkMetadata.removeAll()
+        chunkBoundaryReasons.removeAll()
         completedChunkCount = 0
         totalChunkCount = 0
         finishRequested = false
@@ -318,6 +325,8 @@ final class DictationController {
         transcriptionTasks.removeAll()
         pendingChunks.removeAll()
         partialTranscripts.removeAll()
+        chunkMetadata.removeAll()
+        chunkBoundaryReasons.removeAll()
         completedChunkCount = 0
         totalChunkCount = 0
         finishRequested = false
@@ -461,6 +470,7 @@ final class DictationController {
             if activeTranscriptionEngine == .qwen {
                 Logger.log("dictation qwen live boundary index=\(completed.index) reason=\(reason)")
             }
+            chunkBoundaryReasons[completed.index] = reason
             enqueueChunk(completed)
         }
         if transcriptionFailure == nil, audioEngine != nil {
@@ -482,6 +492,7 @@ final class DictationController {
     private func openNextChunkLocked(format: AVAudioFormat) throws {
         currentChunkIndex += 1
         currentChunkFrameCount = 0
+        currentChunkSampleRate = format.sampleRate
         let chunkURL = FileManager.default.temporaryDirectory.appendingPathComponent("stm-desktop-listener-\(UUID().uuidString)-live-\(currentChunkIndex).wav")
         currentChunkWriter = try AVAudioFile(forWriting: chunkURL, settings: format.settings)
         currentChunkURL = chunkURL
@@ -500,10 +511,23 @@ final class DictationController {
             try? FileManager.default.removeItem(at: url)
             return nil
         }
-        return AudioChunk(index: index, url: url, deleteAfterUse: true, retryDepth: 0)
+        let durationSeconds = currentChunkSampleRate > 0
+            ? TimeInterval(frameCount) / currentChunkSampleRate
+            : 0
+        return AudioChunk(
+            index: index,
+            url: url,
+            deleteAfterUse: true,
+            retryDepth: 0,
+            durationSeconds: durationSeconds
+        )
     }
 
     private func enqueueChunk(_ chunk: AudioChunk) {
+        chunkMetadata.append([
+            "index": chunk.index,
+            "durationSeconds": chunk.durationSeconds,
+        ])
         pendingChunks.append(chunk)
         totalChunkCount = max(totalChunkCount, chunk.index)
         Logger.log("dictation chunk queued index=\(chunk.index) pending=\(pendingChunks.count)")
@@ -642,7 +666,8 @@ final class DictationController {
             engine: activeTranscriptionEngine == .qwen ? "qwen" : "worker",
             source: rawForLearner,
             accepted: punctuatedText,
-            trace: trace
+            trace: trace,
+            metadata: ["chunks": learningChunkMetadata()]
         )
         let recordFinished = CFAbsoluteTimeGetCurrent()
         completeDictation(with: punctuatedText, polished: false)
@@ -654,6 +679,17 @@ final class DictationController {
                 "prePasteTotalMs=\(milliseconds(from: pipelineStart, to: recordFinished)) " +
                 "characters=\(punctuatedText.count) decisions=\(trace.decisions.count)"
         )
+    }
+
+    private func learningChunkMetadata() -> [[String: Any]] {
+        chunkMetadata.map { metadata in
+            var copy = metadata
+            if let index = metadata["index"] as? Int,
+               let reason = chunkBoundaryReasons[index] {
+                copy["boundaryReason"] = reason
+            }
+            return copy
+        }
     }
 
     private func milliseconds(from start: CFAbsoluteTime, to end: CFAbsoluteTime) -> Int {
@@ -795,7 +831,13 @@ final class DictationController {
         }
 
         Logger.log("dictation chunk normalized index=\(chunk.index) inputBytes=\(Self.fileByteCount(chunk.url)) outputBytes=\(Self.fileByteCount(outputURL))")
-        return AudioChunk(index: chunk.index, url: outputURL, deleteAfterUse: true, retryDepth: chunk.retryDepth)
+        return AudioChunk(
+            index: chunk.index,
+            url: outputURL,
+            deleteAfterUse: true,
+            retryDepth: chunk.retryDepth,
+            durationSeconds: chunk.durationSeconds
+        )
     }
 
     private func convertAudioBuffer(_ inputBuffer: AVAudioPCMBuffer, converter: AVAudioConverter, outputFile: AVAudioFile) throws {
@@ -884,7 +926,13 @@ final class DictationController {
                 remainingFrames -= AVAudioFramePosition(buffer.frameLength)
             }
 
-            splitChunks.append(AudioChunk(index: chunk.index, url: partURL, deleteAfterUse: true, retryDepth: chunk.retryDepth + 1))
+            splitChunks.append(AudioChunk(
+                index: chunk.index,
+                url: partURL,
+                deleteAfterUse: true,
+                retryDepth: chunk.retryDepth + 1,
+                durationSeconds: TimeInterval(frameCounts[partIndex]) / input.fileFormat.sampleRate
+            ))
         }
 
         return splitChunks

@@ -376,9 +376,15 @@ enum PunctuationLearning {
 
     /// Feeds one finished dictation into the learner: appends a JSONL record and updates the
     /// policy. Cheap, local, and silent — call right after the final text is produced.
-    static func record(engine: String, source: String, accepted: String, trace: Trace) {
+    static func record(
+        engine: String,
+        source: String,
+        accepted: String,
+        trace: Trace,
+        metadata: [String: Any] = [:]
+    ) {
         let decisions = trace.decisions
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "schema": 1,
             "date": ISO8601DateFormatter().string(from: Date()),
             "engine": engine,
@@ -397,6 +403,9 @@ enum PunctuationLearning {
                 ]
             },
         ]
+        if !metadata.isEmpty {
+            payload["metadata"] = metadata
+        }
         logQueue.async {
             // The ledger is an audit/rebuild artifact, not a label source. System decisions are
             // deliberately not fed back into a policy: deterministic heuristics would otherwise
