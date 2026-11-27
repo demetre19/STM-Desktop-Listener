@@ -647,6 +647,7 @@ enum SpokenDictationFormatter {
         // Clause-shape analysis walks the preceding clause, so first cheaply test both shape
         // buckets; only a plausible correction context pays for that scan.
         var evidencedShape: Bool?
+        var hasAnyEvidence = false
         for probeShape in [false, true] {
             if PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
                 input: .none,
@@ -655,11 +656,21 @@ enum SpokenDictationFormatter {
                 clauseFirst: clauseFirst,
                 shaped: probeShape
             ) != nil {
+                hasAnyEvidence = true
+            }
+            if evidencedShape == nil,
+               PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: .none,
+                previousWord: previousWord,
+                nextWord: nextWord,
+                clauseFirst: clauseFirst,
+                shaped: probeShape,
+                exactOnly: true
+               ) != nil {
                 evidencedShape = probeShape
-                break
             }
         }
-        guard evidencedShape != nil else { return nil }
+        guard hasAnyEvidence else { return nil }
         let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: text)
         var preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
             input: .none,
@@ -672,12 +683,15 @@ enum SpokenDictationFormatter {
         // training and the next dictation. Shape is a heuristic, so use the evidenced bucket
         // as a final exact-context backoff rather than dropping the correction entirely.
         if preferred == nil, let evidencedShape, evidencedShape != shaped {
+            // Opposite-shape fallback exists only for the same exact corrected boundary.
+            // Broad previous-word backoff must not cross the question/statement divide.
             preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
                 input: .none,
                 previousWord: previousWord,
                 nextWord: nextWord,
                 clauseFirst: clauseFirst,
-                shaped: evidencedShape
+                shaped: evidencedShape,
+                exactOnly: true
             )
         }
         guard let preferred, let replacement = preferred.replacementText, !replacement.isEmpty else { return nil }

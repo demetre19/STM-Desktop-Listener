@@ -651,6 +651,24 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 19) cases passed")
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .none,
+            desired: .comma,
+            previousWord: "zshapeleak",
+            nextWord: "alpha",
+            clauseFirst: "how",
+            shaped: true,
+            weight: 10
+        )
+        let oppositeShapeBackoffActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Well zshapeleak beta.",
+            to: "well zshapeleak beta"
+        )
+        guard oppositeShapeBackoffActual == "Well zshapeleak beta." else {
+            print("FAIL: opposite-shape insertion used broad previous-word backoff: \(String(reflecting: oppositeShapeBackoffActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 20) cases passed")
     }
 }

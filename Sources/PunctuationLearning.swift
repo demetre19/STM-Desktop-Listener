@@ -171,18 +171,19 @@ enum PunctuationLearning {
             previousWord: String,
             nextWord: String,
             clauseFirst: String,
-            shaped: Bool
+            shaped: Bool,
+            exactOnly: Bool = false
         ) -> BoundaryLabel? {
             guard lock.try() else { return nil }
             defer { lock.unlock() }
             guard loaded else { return nil }
-            let keys = backoffKeys(
+            let keys = Array(backoffKeys(
                 clauseFirst: clauseFirst,
                 previous: previousWord,
                 next: nextWord,
                 input: input,
                 shaped: shaped
-            )
+            ).prefix(exactOnly ? 1 : 3))
             for (level, k) in keys.enumerated() {
                 guard let storedEntry = stats[k] else { continue }
                 let age = Date().timeIntervalSince1970 - storedEntry.updatedAt
