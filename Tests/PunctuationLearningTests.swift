@@ -54,7 +54,7 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count + 6) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 7) cases passed")
     }
 
     private static func testCorrectionObservations() {
@@ -146,6 +146,41 @@ struct PunctuationLearningTests {
         )
         guard preferred == PunctuationLearning.BoundaryLabel.none else {
             print("FAIL: correction policy did not prefer user-corrected none label: \(String(describing: preferred))")
+            exit(EXIT_FAILURE)
+        }
+
+
+        for clause in ["zbackoff-one", "zbackoff-two"] {
+            PunctuationLearning.CorrectionPolicy.shared.observe(
+                input: .period,
+                desired: PunctuationLearning.BoundaryLabel.none,
+                previousWord: "zsharedprev",
+                nextWord: "zsharednext",
+                clauseFirst: clause,
+                shaped: false,
+                weight: 3
+            )
+        }
+        let generalized = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+            input: .period,
+            previousWord: "zsharedprev",
+            nextWord: "zsharednext",
+            clauseFirst: "zbackoff-unseen",
+            shaped: false
+        )
+        guard generalized == PunctuationLearning.BoundaryLabel.none else {
+            print("FAIL: correction policy did not back off across clause openers: \(String(describing: generalized))")
+            exit(EXIT_FAILURE)
+        }
+        let overgeneralized = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+            input: .period,
+            previousWord: "different-prev",
+            nextWord: "zsharednext",
+            clauseFirst: "zbackoff-unseen",
+            shaped: false
+        )
+        guard overgeneralized == nil else {
+            print("FAIL: correction policy overgeneralized to unrelated boundary words")
             exit(EXIT_FAILURE)
         }
     }

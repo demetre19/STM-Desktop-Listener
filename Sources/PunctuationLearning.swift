@@ -103,7 +103,7 @@ enum PunctuationLearning {
 
         static let storeURL = AppPaths.applicationSupport
             .appendingPathComponent("punctuation-correction-policy.json")
-        private static let maxKeys = 4000
+        private static let maxKeys = 12000
         private static let saveDelay: TimeInterval = 30
 
         private let lock = NSLock()
@@ -115,9 +115,9 @@ enum PunctuationLearning {
 
         private init() {}
 
-        /// Conservative learned preference for a boundary. Requires repeated correction mass,
-        /// a dominant winner, and a margin over the next alternative; otherwise nil means the
-        /// deterministic grammar heuristics remain in charge.
+        /// Conservative learned preference for a boundary. Exact evidence wins first; broader
+        /// backoff keys require more mass, dominance, and margin. Nil means deterministic
+        /// grammar heuristics remain in charge.
         func preferredLabel(
             input: BoundaryLabel,
             previousWord: String,
@@ -127,28 +127,33 @@ enum PunctuationLearning {
         ) -> BoundaryLabel? {
             guard lock.try() else { return nil }
             defer { lock.unlock() }
-            guard loaded,
-                  let entry = stats[key(
-                      clauseFirst: clauseFirst,
-                      previous: previousWord,
-                      next: nextWord,
-                      input: input,
-                      shaped: shaped
-                  )] else { return nil }
-            let ranked = entry
-                .filter { $0.value > 0 }
-                .sorted { lhs, rhs in
-                    if lhs.value != rhs.value { return lhs.value > rhs.value }
-                    return lhs.key.rawValue < rhs.key.rawValue
-                }
-            guard let winner = ranked.first else { return nil }
-            let runnerUp = ranked.dropFirst().first?.value ?? 0
-            let total = ranked.reduce(0) { $0 + $1.value }
-            guard total >= 3,
-                  winner.value >= 3,
-                  winner.value >= runnerUp + 2,
-                  Double(winner.value) / Double(total) >= 0.75 else { return nil }
-            return winner.key
+            guard loaded else { return nil }
+            let keys = backoffKeys(
+                clauseFirst: clauseFirst,
+                previous: previousWord,
+                next: nextWord,
+                input: input,
+                shaped: shaped
+            )
+            for (level, k) in keys.enumerated() {
+                guard let entry = stats[k] else { continue }
+                let ranked = entry
+                    .filter { $0.value > 0 }
+                    .sorted { lhs, rhs in
+                        if lhs.value != rhs.value { return lhs.value > rhs.value }
+                        return lhs.key.rawValue < rhs.key.rawValue
+                    }
+                guard let winner = ranked.first else { continue }
+                let runnerUp = ranked.dropFirst().first?.value ?? 0
+                let total = ranked.reduce(0) { $0 + $1.value }
+                let requirements = (minimumTotal: 3 + level * 3, margin: 2 + level, share: 0.75 + Double(level) * 0.05)
+                guard total >= requirements.minimumTotal,
+                      winner.value >= 3,
+                      winner.value >= runnerUp + requirements.margin,
+                      Double(winner.value) / Double(total) >= requirements.share else { continue }
+                return winner.key
+            }
+            return nil
         }
 
         func observe(
@@ -164,23 +169,24 @@ enum PunctuationLearning {
             lock.lock()
             defer { lock.unlock() }
             loadLocked()
-            let k = key(
+            for k in backoffKeys(
                 clauseFirst: clauseFirst,
                 previous: previousWord,
                 next: nextWord,
                 input: input,
                 shaped: shaped
-            )
-            var entry = stats[k] ?? [:]
-            entry[desired, default: 0] += weight
-            if stats[k] == nil {
-                insertionOrder.append(k)
-                while insertionOrder.count > Self.maxKeys {
-                    let evicted = insertionOrder.removeFirst()
-                    stats.removeValue(forKey: evicted)
+            ) {
+                var entry = stats[k] ?? [:]
+                entry[desired, default: 0] += weight
+                if stats[k] == nil {
+                    insertionOrder.append(k)
+                    while insertionOrder.count > Self.maxKeys {
+                        let evicted = insertionOrder.removeFirst()
+                        stats.removeValue(forKey: evicted)
+                    }
                 }
+                stats[k] = entry
             }
-            stats[k] = entry
             dirty = true
             scheduleSaveLocked()
         }
@@ -220,6 +226,23 @@ enum PunctuationLearning {
         ) -> String {
             [clauseFirst, previous, next.isEmpty ? "$" : next, input.rawValue, shaped ? "q" : "s"]
                 .joined(separator: "|")
+        }
+
+        /// Exact evidence wins first. Broader keys are only backoffs for unseen clause openers:
+        /// flank words together, then the preceding word alone. There is deliberately no global
+        /// punctuation-only backoff because that would overgeneralize personal corrections.
+        private func backoffKeys(
+            clauseFirst: String,
+            previous: String,
+            next: String,
+            input: BoundaryLabel,
+            shaped: Bool
+        ) -> [String] {
+            [
+                key(clauseFirst: clauseFirst, previous: previous, next: next, input: input, shaped: shaped),
+                key(clauseFirst: "*", previous: previous, next: next, input: input, shaped: shaped),
+                key(clauseFirst: "*", previous: previous, next: "*", input: input, shaped: shaped),
+            ]
         }
 
         private func scheduleSaveLocked() {
