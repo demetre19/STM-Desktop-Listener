@@ -54,7 +54,7 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count + 11) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 12) cases passed")
     }
 
     private static func testCorrectionObservations() {
@@ -189,6 +189,18 @@ struct PunctuationLearningTests {
         )
         guard preferred == PunctuationLearning.BoundaryLabel.none else {
             print("FAIL: correction policy did not prefer user-corrected none label: \(String(describing: preferred))")
+            exit(EXIT_FAILURE)
+        }
+
+        guard PunctuationLearning.CorrectionPolicy.shared.hasEvidence(
+            for: .period,
+            previousWord: "zz-never-real-prev"
+        ),
+              !PunctuationLearning.CorrectionPolicy.shared.hasEvidence(
+            for: .period,
+            previousWord: "zz-unseen-prev"
+        ) else {
+            print("FAIL: correction evidence preflight did not filter by previous word")
             exit(EXIT_FAILURE)
         }
 

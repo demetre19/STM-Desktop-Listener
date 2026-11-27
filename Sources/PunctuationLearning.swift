@@ -146,6 +146,7 @@ enum PunctuationLearning {
         private var stats: [String: Entry] = [:]
         private var insertionOrder: [String] = []
         private var observedInputs: Set<BoundaryLabel> = []
+        private var observedInputPreviousPairs: Set<String> = []
         private var dirty = false
         private var loaded = false
         private var savePending = false
@@ -154,10 +155,12 @@ enum PunctuationLearning {
 
         /// Cheap paste-path preflight. Most boundaries have never produced correction evidence;
         /// callers can use this to avoid expensive clause-shape analysis in the common case.
-        func hasEvidence(for input: BoundaryLabel) -> Bool {
+        func hasEvidence(for input: BoundaryLabel, previousWord: String? = nil) -> Bool {
             guard lock.try() else { return false }
             defer { lock.unlock() }
-            return observedInputs.contains(input)
+            guard observedInputs.contains(input) else { return false }
+            guard let previousWord else { return true }
+            return observedInputPreviousPairs.contains("\(input.rawValue)|\(previousWord)")
         }
 
         /// Conservative learned preference for a boundary. Exact evidence wins first; broader
@@ -218,6 +221,7 @@ enum PunctuationLearning {
             defer { lock.unlock() }
             loadLocked()
             observedInputs.insert(input)
+            observedInputPreviousPairs.insert("\(input.rawValue)|\(previousWord)")
             let now = Date().timeIntervalSince1970
             for k in backoffKeys(
                 clauseFirst: clauseFirst,
@@ -267,6 +271,7 @@ enum PunctuationLearning {
             stats.removeAll()
             insertionOrder.removeAll()
             observedInputs.removeAll()
+            observedInputPreviousPairs.removeAll()
             dirty = false
             loaded = true
             savePending = false
@@ -304,7 +309,10 @@ enum PunctuationLearning {
         private func scheduleSaveLocked() {
             guard !savePending else { return }
             savePending = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.saveDelay) { [weak self] in
+            // User-triggered policy persistence must never steal the main actor during a later
+            // paste. Periodic saves are utility work; application termination still flushes
+            // synchronously so no evidence is lost.
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.saveDelay) { [weak self] in
                 self?.flush()
             }
         }
@@ -324,6 +332,7 @@ enum PunctuationLearning {
                 let parts = key.split(separator: "|")
                 if parts.count == 5, let input = BoundaryLabel(rawValue: String(parts[3])) {
                     observedInputs.insert(input)
+                    observedInputPreviousPairs.insert("\(input.rawValue)|\(parts[1])")
                 }
             }
 

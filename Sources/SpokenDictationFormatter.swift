@@ -576,9 +576,9 @@ enum SpokenDictationFormatter {
         in text: NSString,
         trace: PunctuationLearning.Trace?
     ) -> String? {
-        guard PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .none) else { return nil }
-        let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: text)
         let previousWord = words[previousIndex].text.lowercased()
+        guard PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .none, previousWord: previousWord) else { return nil }
+        let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: text)
         let nextWord = words[nextIndex].text.lowercased()
         let clauseFirst = words[clauseStart].text.lowercased()
 
@@ -702,10 +702,11 @@ enum SpokenDictationFormatter {
         if trimmed.contains(",") {
             let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: candidate)
             let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: candidate)
-            if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .comma),
+            let commaPreviousWord = words[previousIndex].text.lowercased()
+            if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .comma, previousWord: commaPreviousWord),
                let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
                 input: .comma,
-                previousWord: words[previousIndex].text.lowercased(),
+                previousWord: commaPreviousWord,
                 nextWord: words[nextIndex].text.lowercased(),
                 clauseFirst: words[clauseStart].text.lowercased(),
                 shaped: shaped
@@ -876,7 +877,7 @@ enum SpokenDictationFormatter {
         )
         if !terminator.isEmpty {
             let input = PunctuationLearning.boundaryLabel(for: terminator)
-            if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: input),
+            if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: input, previousWord: previousWord),
                let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
                 input: input,
                 previousWord: previousWord,
@@ -1201,10 +1202,11 @@ enum SpokenDictationFormatter {
                 let input = PunctuationLearning.boundaryLabel(
                     for: String(stripped[terminal].first ?? ".")
                 )
-                if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: input),
+                let terminalPreviousWord = finalWords.last?.text.lowercased() ?? ""
+                if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: input, previousWord: terminalPreviousWord),
                    let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
                     input: input,
-                    previousWord: finalWords.last?.text.lowercased() ?? "",
+                    previousWord: terminalPreviousWord,
                     nextWord: "",
                     clauseFirst: finalWords.first?.text.lowercased() ?? "",
                     shaped: shaped
