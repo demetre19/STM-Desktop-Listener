@@ -496,9 +496,11 @@ enum SpokenDictationFormatter {
                         nextIndex: right,
                         words: candidateWords,
                         in: candidateText,
-                        mergedBoundaryWords: &mergedBoundaryWords,
                         trace: trace
                     ) {
+                        if sanitized == " ", gap.range(of: "[.!?…]", options: .regularExpression) != nil {
+                            mergedBoundaryWords.insert(index + 1)
+                        }
                         result.append(sanitized)
                     } else {
                         result.append(gap)
@@ -551,7 +553,6 @@ enum SpokenDictationFormatter {
         nextIndex: Int,
         words: [(text: String, range: NSRange)],
         in candidate: NSString,
-        mergedBoundaryWords: inout Set<Int>,
         trace: PunctuationLearning.Trace? = nil
     ) -> String? {
         let trimmed = gap.trimmingCharacters(in: .whitespaces)
@@ -578,7 +579,6 @@ enum SpokenDictationFormatter {
                 in: candidate
             ) {
             case .merge(let learned):
-                mergedBoundaryWords.insert(nextIndex)
                 record("merge", learned: learned)
                 return " "
             case .keep(let learned):

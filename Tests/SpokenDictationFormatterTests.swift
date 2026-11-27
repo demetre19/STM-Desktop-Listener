@@ -169,6 +169,12 @@ struct SpokenDictationFormatterTests {
                 ".",
                 "."
             ),
+            (
+                "model insertion does not shift merged boundary casing",
+                "alpha beta and Gamma",
+                "Alpha beta filler and. Gamma",
+                "Alpha beta and gamma."
+            ),
         ]
         let substitutionCases: [(name: String, substitutions: [String: String], input: String, expected: String)] = [
             (
