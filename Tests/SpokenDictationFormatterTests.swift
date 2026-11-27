@@ -175,6 +175,12 @@ struct SpokenDictationFormatterTests {
                 "Alpha beta filler and. Gamma",
                 "Alpha beta and gamma."
             ),
+            (
+                "meaningful trailing symbols survive model normalization",
+                "please use C++",
+                "Please use C.",
+                "Please use C++."
+            ),
         ]
         let substitutionCases: [(name: String, substitutions: [String: String], input: String, expected: String)] = [
             (

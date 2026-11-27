@@ -535,6 +535,9 @@ enum SpokenDictationFormatter {
                 location: NSMaxRange(candidateWords.last!.range),
                 length: candidateText.length - NSMaxRange(candidateWords.last!.range)
             )
+            // Symbols such as `++` are not punctuation, but they are still meaningful source
+            // text. Preserve them and then accept the model's terminal punctuation.
+            result.append(sourceSuffix)
             result.append(candidateText.substring(with: candidateSuffixRange))
         } else {
             result.append(sourceSuffix)
