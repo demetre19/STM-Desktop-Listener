@@ -450,11 +450,12 @@ enum PunctuationLearning {
         if !metadata.isEmpty {
             payload["metadata"] = metadata
         }
+        let immutablePayload = payload
         logQueue.async {
             // The ledger is an audit/rebuild artifact, not a label source. System decisions are
             // deliberately not fed back into a policy: deterministic heuristics would otherwise
             // vote for themselves until their own output looked like user truth.
-            appendLogLine(payload)
+            appendLogLine(immutablePayload)
         }
         return dictationID
     }
@@ -472,7 +473,7 @@ enum PunctuationLearning {
             try? manager.removeItem(at: url)
         }
         if !manager.fileExists(atPath: url.path) {
-            manager.createFile(atPath: url.path, contents: nil)
+            _ = manager.createFile(atPath: url.path, contents: nil)
             try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
         guard let handle = try? FileHandle(forWritingTo: url) else { return }
