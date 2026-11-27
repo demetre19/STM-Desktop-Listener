@@ -73,9 +73,21 @@ enum PunctuationLearning {
                 return true
             }
         }
-        return clauseWords
-            .joined(separator: " ")
-            .range(of: embeddedQuestionPattern, options: .regularExpression) != nil
+        let embeddedTargets: Set<String> = ["if", "whether", "who", "what", "when", "where", "why", "how", "which"]
+        for index in clauseWords.indices {
+            if ["check", "determine", "verify"].contains(clauseWords[index]),
+               index + 1 < clauseWords.count,
+               embeddedTargets.contains(clauseWords[index + 1]) {
+                return true
+            }
+            if index + 2 < clauseWords.count,
+               ((clauseWords[index] == "find" && clauseWords[index + 1] == "out")
+                   || (clauseWords[index] == "tell" && clauseWords[index + 1] == "me")),
+               ["if", "whether"].contains(clauseWords[index + 2]) {
+                return true
+            }
+        }
+        return false
     }
 
     struct CorrectionObservation {
@@ -133,11 +145,20 @@ enum PunctuationLearning {
         private let lock = NSLock()
         private var stats: [String: Entry] = [:]
         private var insertionOrder: [String] = []
+        private var observedInputs: Set<BoundaryLabel> = []
         private var dirty = false
         private var loaded = false
         private var savePending = false
 
         private init() {}
+
+        /// Cheap paste-path preflight. Most boundaries have never produced correction evidence;
+        /// callers can use this to avoid expensive clause-shape analysis in the common case.
+        func hasEvidence(for input: BoundaryLabel) -> Bool {
+            guard lock.try() else { return false }
+            defer { lock.unlock() }
+            return observedInputs.contains(input)
+        }
 
         /// Conservative learned preference for a boundary. Exact evidence wins first; broader
         /// backoff keys require more mass, dominance, and margin. Nil means deterministic
@@ -196,6 +217,7 @@ enum PunctuationLearning {
             lock.lock()
             defer { lock.unlock() }
             loadLocked()
+            observedInputs.insert(input)
             let now = Date().timeIntervalSince1970
             for k in backoffKeys(
                 clauseFirst: clauseFirst,
@@ -244,6 +266,7 @@ enum PunctuationLearning {
             defer { lock.unlock() }
             stats.removeAll()
             insertionOrder.removeAll()
+            observedInputs.removeAll()
             dirty = false
             loaded = true
             savePending = false
@@ -298,6 +321,10 @@ enum PunctuationLearning {
                 guard !counts.isEmpty else { return }
                 stats[key] = Entry(counts: counts, updatedAt: updatedAt)
                 insertionOrder.append(key)
+                let parts = key.split(separator: "|")
+                if parts.count == 5, let input = BoundaryLabel(rawValue: String(parts[3])) {
+                    observedInputs.insert(input)
+                }
             }
 
             if let entries = root["entries"] as? [String: Any] {

@@ -554,21 +554,42 @@ enum SpokenDictationFormatter {
         in text: NSString,
         trace: PunctuationLearning.Trace?
     ) -> String? {
+        guard PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .none) else { return nil }
         let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: text)
+        let previousWord = words[previousIndex].text.lowercased()
+        let nextWord = words[nextIndex].text.lowercased()
+        let clauseFirst = words[clauseStart].text.lowercased()
+
+        // Clause-shape analysis uses a regex and is the expensive part of an insertion probe.
+        // First cheaply test both shape buckets; only a plausible correction context pays for it.
+        var plausible = false
+        for probeShape in [false, true] {
+            if PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: .none,
+                previousWord: previousWord,
+                nextWord: nextWord,
+                clauseFirst: clauseFirst,
+                shaped: probeShape
+            ) != nil {
+                plausible = true
+                break
+            }
+        }
+        guard plausible else { return nil }
         let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: text)
         guard let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
             input: .none,
-            previousWord: words[previousIndex].text.lowercased(),
-            nextWord: words[nextIndex].text.lowercased(),
-            clauseFirst: words[clauseStart].text.lowercased(),
+            previousWord: previousWord,
+            nextWord: nextWord,
+            clauseFirst: clauseFirst,
             shaped: shaped
         ), let replacement = preferred.replacementText, !replacement.isEmpty else { return nil }
         trace?.record(.init(
             gap: "none",
             terminator: "",
-            previous: words[previousIndex].text.lowercased(),
-            next: words[nextIndex].text.lowercased(),
-            clauseFirst: words[clauseStart].text.lowercased(),
+            previous: previousWord,
+            next: nextWord,
+            clauseFirst: clauseFirst,
             shaped: shaped,
             action: "insert",
             learned: true
@@ -657,7 +678,8 @@ enum SpokenDictationFormatter {
         if trimmed.contains(",") {
             let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: candidate)
             let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: candidate)
-            if let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+            if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .comma),
+               let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
                 input: .comma,
                 previousWord: words[previousIndex].text.lowercased(),
                 nextWord: words[nextIndex].text.lowercased(),
@@ -759,7 +781,8 @@ enum SpokenDictationFormatter {
         if trimmed.contains(",") {
             let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: sourceText)
             let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: sourceText)
-            if let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+            if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .comma),
+               let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
                 input: .comma,
                 previousWord: words[previousIndex].text.lowercased(),
                 nextWord: words[nextIndex].text.lowercased(),
@@ -824,7 +847,8 @@ enum SpokenDictationFormatter {
         )
         if !terminator.isEmpty {
             let input = PunctuationLearning.boundaryLabel(for: terminator)
-            if let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+            if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: input),
+               let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
                 input: input,
                 previousWord: previousWord,
                 nextWord: words[previousIndex + 1].text.lowercased(),
@@ -1141,7 +1165,8 @@ enum SpokenDictationFormatter {
                 let input = PunctuationLearning.boundaryLabel(
                     for: String(stripped[terminal].first ?? ".")
                 )
-                if let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: input),
+                   let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
                     input: input,
                     previousWord: finalWords.last?.text.lowercased() ?? "",
                     nextWord: "",
