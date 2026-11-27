@@ -89,9 +89,11 @@ enum PunctuationLearning {
             return nil
         }
 
-        /// Records an observed decision outcome for future votes.
+        /// Records an observed decision outcome for future votes. Policy-driven decisions are
+        /// not independent evidence: counting them again would make the learner reinforce its
+        /// own guesses instead of learning from recognizer/model behavior or user corrections.
         func observe(_ decision: GapDecision) {
-            guard !decision.terminator.isEmpty else { return }
+            guard !decision.learned, !decision.terminator.isEmpty else { return }
             lock.lock()
             defer { lock.unlock() }
             loadLocked()
