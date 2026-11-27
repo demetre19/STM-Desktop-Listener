@@ -660,14 +660,21 @@ final class DictationController {
         }
         let cleanupFinished = CFAbsoluteTimeGetCurrent()
         let trace = PunctuationLearning.Trace()
-        let punctuatedText = LocalPunctuationService.apply(to: cleanupInput, trace: trace)
+        let punctuationResult = LocalPunctuationService.apply(to: cleanupInput, trace: trace)
+        let punctuatedText = punctuationResult.text
         let punctuationFinished = CFAbsoluteTimeGetCurrent()
         PunctuationLearning.record(
             engine: activeTranscriptionEngine == .qwen ? "qwen" : "worker",
             source: rawForLearner,
             accepted: punctuatedText,
             trace: trace,
-            metadata: ["chunks": learningChunkMetadata()]
+            metadata: learningMetadata(
+                rawASR: rawTranscript,
+                spokenCommands: formattedText,
+                substituted: substitutedText,
+                cleanupInput: cleanupInput,
+                punctuationResult: punctuationResult
+            )
         )
         let recordFinished = CFAbsoluteTimeGetCurrent()
         completeDictation(with: punctuatedText, polished: false)
@@ -679,6 +686,32 @@ final class DictationController {
                 "prePasteTotalMs=\(milliseconds(from: pipelineStart, to: recordFinished)) " +
                 "characters=\(punctuatedText.count) decisions=\(trace.decisions.count)"
         )
+    }
+
+    private func learningMetadata(
+        rawASR: String,
+        spokenCommands: String,
+        substituted: String,
+        cleanupInput: String,
+        punctuationResult: (text: String, candidate: String?, modelInput: String)
+    ) -> [String: Any] {
+        func bounded(_ text: String) -> String {
+            String(text.prefix(4000))
+        }
+        var stages: [String: String] = [
+            "rawASR": bounded(rawASR),
+            "spokenCommands": bounded(spokenCommands),
+            "substituted": bounded(substituted),
+            "cleanupInput": bounded(cleanupInput),
+            "punctuationModelInput": bounded(punctuationResult.modelInput),
+        ]
+        if let candidate = punctuationResult.candidate {
+            stages["punctuationCandidate"] = bounded(candidate)
+        }
+        return [
+            "chunks": learningChunkMetadata(),
+            "stages": stages,
+        ]
     }
 
     private func learningChunkMetadata() -> [[String: Any]] {

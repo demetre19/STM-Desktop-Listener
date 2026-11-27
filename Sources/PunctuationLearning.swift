@@ -412,7 +412,8 @@ enum PunctuationLearning {
     ) {
         let decisions = trace.decisions
         var payload: [String: Any] = [
-            "schema": 1,
+            "schema": 2,
+            "dictationID": UUID().uuidString,
             "date": ISO8601DateFormatter().string(from: Date()),
             "engine": engine,
             "source": source,
