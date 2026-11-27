@@ -159,6 +159,12 @@ struct SpokenDictationFormatterTests {
                 "Can you see if it works.",
                 "Can you see if it works?"
             ),
+            (
+                "punctuation-only input cannot crash",
+                ".\u{FE00}",
+                ".",
+                "."
+            ),
         ]
         let substitutionCases: [(name: String, substitutions: [String: String], input: String, expected: String)] = [
             (

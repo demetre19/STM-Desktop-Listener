@@ -155,6 +155,9 @@ enum SpokenDictationFormatter {
 
         let sourceWords = wordMatches(in: source)
         let proposedWords = wordMatches(in: proposed)
+        guard !sourceWords.isEmpty, !proposedWords.isEmpty else {
+            return enforcingLikelyQuestionTerminal(in: source, trace: trace)
+        }
         let anchors = alignWords(source: sourceWords, candidate: proposedWords)
 
         // A small mismatch window is tolerated: the model may retokenize contractions or drop
