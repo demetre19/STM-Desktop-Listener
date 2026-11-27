@@ -591,6 +591,9 @@ enum PunctuationLearning {
 
         let pastedGaps = gapTexts(words: pastedWords, in: pasted)
         let finalGaps = gapTexts(words: finalWords, in: final, terminalEnd: terminalEnd)
+        let pastedLabels = pastedGaps.interior.map(boundaryLabel(for:)) + [boundaryLabel(for: pastedGaps.terminal)]
+        let finalLabels = finalGaps.interior.map(boundaryLabel(for:)) + [boundaryLabel(for: finalGaps.terminal)]
+        let punctuationWasEdited = zip(pastedLabels, finalLabels).contains { $0 != $1 }
         var observations: [CorrectionObservation] = []
         var seen: Set<String> = []
         var decisionBoundaries: Set<Int> = []
@@ -675,7 +678,10 @@ enum PunctuationLearning {
                 ))
             }
         }
-        return observations
+        // Capitalization-only or whitespace-only field edits do not prove the user reviewed
+        // punctuation. Keep weak confirmations only when some boundary in the pasted segment
+        // actually changed punctuation class.
+        return punctuationWasEdited ? observations : []
     }
 
     private static func parseDecisions(_ decisions: [[String: Any]]) -> [GapDecision] {

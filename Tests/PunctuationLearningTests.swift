@@ -54,7 +54,7 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count + 9) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 10) cases passed")
     }
 
     private static func testCorrectionObservations() {
@@ -109,6 +109,16 @@ struct PunctuationLearningTests {
               unchangedObservations[0].desired == .period,
               unchangedObservations[0].weight == 1 else {
             print("FAIL: unchanged edited boundary did not produce weak confirmation: \(unchangedObservations)")
+            exit(EXIT_FAILURE)
+        }
+
+        let capitalizationOnlyObservations = PunctuationLearning.correctionObservations(
+            pasted: "I was going to say. And then he left.",
+            final: "I was going to say. And then He left.",
+            decisions: [mergeDecision]
+        )
+        guard capitalizationOnlyObservations.isEmpty else {
+            print("FAIL: capitalization-only edit produced weak punctuation evidence")
             exit(EXIT_FAILURE)
         }
 
