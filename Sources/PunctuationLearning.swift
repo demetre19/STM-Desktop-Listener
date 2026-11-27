@@ -786,7 +786,9 @@ enum PunctuationLearning {
             }
         }
         // Pre-schema-v2 ledgers and development fixtures have no stable ID. Exact-text replay
-        // remains the compatibility fallback, while new app captures should use dictationID.
+        // remains the compatibility fallback only when no ID was captured; an unmatched ID must
+        // abstain rather than attach the correction to a repeated dictation of the same text.
+        guard dictationID == nil else { return [] }
         for line in text.split(separator: "\n").reversed() {
             guard let entry = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   entry["accepted"] as? String == accepted,
@@ -861,8 +863,12 @@ enum PunctuationLearning {
                   let pasted = entry["pasted"] as? String,
                   let final = entry["final"] as? String
             else { continue }
-            let decisions = (entry["dictationID"] as? String).flatMap { decisionsByID[$0] }
-                ?? decisionsByAccepted[pasted]
+            let decisions: [GapDecision]?
+            if let dictationID = entry["dictationID"] as? String {
+                decisions = decisionsByID[dictationID]
+            } else {
+                decisions = decisionsByAccepted[pasted]
+            }
             guard let decisions else { continue }
             let observations = correctionObservations(pasted: pasted, final: final, decisions: decisions)
             observationCount += observations.count

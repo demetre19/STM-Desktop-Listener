@@ -54,7 +54,7 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count + 13) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 14) cases passed")
     }
 
     private static func testCorrectionObservations() {
@@ -285,8 +285,9 @@ struct PunctuationLearningTests {
         let correctIDEntry = "{\"schema\":2,\"dictationID\":\"correct-id\",\"accepted\":\"\(idPasted)\",\"decisions\":[{\"gap\":\"model\",\"term\":\".\",\"prev\":\"zidprev\",\"next\":\"zidnext\",\"clause\":\"alpha\",\"shaped\":false,\"action\":\"keep\",\"learned\":false}]}"
         let wrongIDEntry = "{\"schema\":2,\"dictationID\":\"wrong-id\",\"accepted\":\"\(idPasted)\",\"decisions\":[{\"gap\":\"model\",\"term\":\",\",\"prev\":\"zidprev\",\"next\":\"zidnext\",\"clause\":\"alpha\",\"shaped\":false,\"action\":\"keep\",\"learned\":false}]}"
         let idEditEntry = "{\"schema\":2,\"kind\":\"postEdit\",\"dictationID\":\"correct-id\",\"pasted\":\"\(idPasted)\",\"final\":\"\(idFinal)\"}"
+        let missingIDEditEntry = "{\"schema\":2,\"kind\":\"postEdit\",\"dictationID\":\"missing-id\",\"pasted\":\"\(idPasted)\",\"final\":\"\(idFinal)\"}"
         let editEntry = "{\"schema\":1,\"kind\":\"postEdit\",\"pasted\":\"\(pasted)\",\"final\":\"\(final)\"}"
-        try? ([acceptedEntry, correctIDEntry, wrongIDEntry, editEntry, idEditEntry].joined(separator: "\n") + "\n").write(
+        try? ([acceptedEntry, correctIDEntry, wrongIDEntry, editEntry, idEditEntry, missingIDEditEntry].joined(separator: "\n") + "\n").write(
             to: PunctuationLearning.trainingLogURL,
             atomically: true,
             encoding: .utf8
@@ -313,6 +314,18 @@ struct PunctuationLearningTests {
         )
         guard idPreferred == PunctuationLearning.BoundaryLabel.none else {
             print("FAIL: rebuild did not use dictation IDs to disambiguate repeated text: \(String(describing: idPreferred))")
+            exit(EXIT_FAILURE)
+        }
+
+        let wrongInputPreferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+            input: .comma,
+            previousWord: "zidprev",
+            nextWord: "zidnext",
+            clauseFirst: "alpha",
+            shaped: false
+        )
+        guard wrongInputPreferred == nil else {
+            print("FAIL: unmatched dictation ID fell back to ambiguous repeated text: \(String(describing: wrongInputPreferred))")
             exit(EXIT_FAILURE)
         }
 
