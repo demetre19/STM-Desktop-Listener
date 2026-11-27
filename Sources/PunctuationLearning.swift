@@ -403,17 +403,19 @@ enum PunctuationLearning {
 
     /// Feeds one finished dictation into the learner: appends a JSONL record and updates the
     /// policy. Cheap, local, and silent — call right after the final text is produced.
+    @discardableResult
     static func record(
         engine: String,
         source: String,
         accepted: String,
         trace: Trace,
         metadata: [String: Any] = [:]
-    ) {
+    ) -> String {
         let decisions = trace.decisions
+        let dictationID = UUID().uuidString
         var payload: [String: Any] = [
             "schema": 2,
-            "dictationID": UUID().uuidString,
+            "dictationID": dictationID,
             "date": ISO8601DateFormatter().string(from: Date()),
             "engine": engine,
             "source": source,
@@ -440,6 +442,7 @@ enum PunctuationLearning {
             // vote for themselves until their own output looked like user truth.
             appendLogLine(payload)
         }
+        return dictationID
     }
 
     private static func appendLogLine(_ payload: [String: Any]) {
@@ -728,10 +731,24 @@ enum PunctuationLearning {
         }
     }
 
-    private static func loggedDecisions(forAccepted accepted: String) -> [GapDecision] {
+    private static func loggedDecisions(
+        forAccepted accepted: String,
+        dictationID: String? = nil
+    ) -> [GapDecision] {
         guard let data = try? Data(contentsOf: trainingLogURL),
               let text = String(data: data, encoding: .utf8)
         else { return [] }
+        if let dictationID {
+            for line in text.split(separator: "\n").reversed() {
+                guard let entry = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                      entry["dictationID"] as? String == dictationID,
+                      let decisions = entry["decisions"] as? [[String: Any]]
+                else { continue }
+                return parseDecisions(decisions)
+            }
+        }
+        // Pre-schema-v2 ledgers and development fixtures have no stable ID. Exact-text replay
+        // remains the compatibility fallback, while new app captures should use dictationID.
         for line in text.split(separator: "\n").reversed() {
             guard let entry = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   entry["accepted"] as? String == accepted,
@@ -746,18 +763,21 @@ enum PunctuationLearning {
     /// text we pasted versus what was finally left in the field. Written as a
     /// decision-free ledger entry. Rebuilds mine these source→final pairs as the
     /// user-truth labels that system decisions themselves cannot provide.
-    static func recordPostEdit(pasted: String, final: String) {
+    static func recordPostEdit(pasted: String, final: String, dictationID: String? = nil) {
         guard !pasted.isEmpty, !final.isEmpty, pasted != final else { return }
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "schema": 2,
             "date": ISO8601DateFormatter().string(from: Date()),
             "kind": "postEdit",
             "pasted": pasted,
             "final": final,
         ]
+        if let dictationID {
+            payload["dictationID"] = dictationID
+        }
         logQueue.async {
             appendLogLine(payload)
-            let decisions = loggedDecisions(forAccepted: pasted)
+            let decisions = loggedDecisions(forAccepted: pasted, dictationID: dictationID)
             let observations = correctionObservations(pasted: pasted, final: final, decisions: decisions)
             for observation in observations {
                 CorrectionPolicy.shared.observe(
@@ -785,20 +805,27 @@ enum PunctuationLearning {
             return
         }
         var decisionsByAccepted: [String: [GapDecision]] = [:]
+        var decisionsByID: [String: [GapDecision]] = [:]
         var observationCount = 0
         for line in text.split(separator: "\n") {
             guard let entry = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
             else { continue }
             if let accepted = entry["accepted"] as? String,
                let decisions = entry["decisions"] as? [[String: Any]] {
-                decisionsByAccepted[accepted] = parseDecisions(decisions)
+                let parsed = parseDecisions(decisions)
+                decisionsByAccepted[accepted] = parsed
+                if let dictationID = entry["dictationID"] as? String {
+                    decisionsByID[dictationID] = parsed
+                }
                 continue
             }
             guard entry["kind"] as? String == "postEdit",
                   let pasted = entry["pasted"] as? String,
-                  let final = entry["final"] as? String,
-                  let decisions = decisionsByAccepted[pasted]
+                  let final = entry["final"] as? String
             else { continue }
+            let decisions = (entry["dictationID"] as? String).flatMap { decisionsByID[$0] }
+                ?? decisionsByAccepted[pasted]
+            guard let decisions else { continue }
             let observations = correctionObservations(pasted: pasted, final: final, decisions: decisions)
             observationCount += observations.count
             for observation in observations {

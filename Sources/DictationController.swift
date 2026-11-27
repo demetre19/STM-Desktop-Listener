@@ -68,6 +68,7 @@ final class DictationController {
     /// Last text this controller pasted, so the next dictation can capture any
     /// user edits made to it ("what it finally looked like").
     private var lastPastedText: String?
+    private var lastPastedDictationID: String?
 
     private var isBusy = false
     private var currentModel = TranscriptionModel.load()
@@ -672,7 +673,7 @@ final class DictationController {
         let punctuationResult = LocalPunctuationService.apply(to: cleanupInput, trace: trace)
         let punctuatedText = punctuationResult.text
         let punctuationFinished = CFAbsoluteTimeGetCurrent()
-        PunctuationLearning.record(
+        let learningDictationID = PunctuationLearning.record(
             engine: activeTranscriptionEngine == .qwen ? "qwen" : "worker",
             source: rawForLearner,
             accepted: punctuatedText,
@@ -687,6 +688,7 @@ final class DictationController {
         )
         let recordFinished = CFAbsoluteTimeGetCurrent()
         completeDictation(with: punctuatedText, polished: false)
+        lastPastedDictationID = learningDictationID
         Logger.logAsync(
             "dictation pipeline timing commandsMs=\(milliseconds(from: pipelineStart, to: commandsFinished)) " +
                 "cleanupMs=\(milliseconds(from: commandsFinished, to: cleanupFinished)) " +
@@ -756,7 +758,9 @@ final class DictationController {
     /// learner sees the *real* final output, not just what the model emitted.
     private func capturePostEditIfNeeded() {
         guard let pasted = lastPastedText else { return }
+        let dictationID = lastPastedDictationID
         lastPastedText = nil
+        lastPastedDictationID = nil
         guard ConfigStore.bool("dictation.capturePostEdits", default: true) else {
             Logger.log("post-edit skip reason=disabled")
             return
@@ -776,7 +780,7 @@ final class DictationController {
             Logger.log("post-edit skip reason=field-changed pastedChars=\(pasted.count) focusedChars=\(focused.count)")
             return
         }
-        PunctuationLearning.recordPostEdit(pasted: pasted, final: focused)
+        PunctuationLearning.recordPostEdit(pasted: pasted, final: focused, dictationID: dictationID)
         Logger.log("post-edit captured pastedChars=\(pasted.count) finalChars=\(focused.count)")
     }
 

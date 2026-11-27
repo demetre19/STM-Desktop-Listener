@@ -54,7 +54,7 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count + 10) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 11) cases passed")
     }
 
     private static func testCorrectionObservations() {
@@ -246,8 +246,13 @@ struct PunctuationLearningTests {
         let pasted = "Alpha zrebuildprev. Zrebuildnext end."
         let final = "Alpha zrebuildprev zrebuildnext end."
         let acceptedEntry = "{\"schema\":1,\"accepted\":\"\(pasted)\",\"decisions\":[{\"gap\":\"model\",\"term\":\".\",\"prev\":\"zrebuildprev\",\"next\":\"zrebuildnext\",\"clause\":\"alpha\",\"shaped\":false,\"action\":\"keep\",\"learned\":false}]}"
+        let idPasted = "Alpha zidprev. Zidnext end."
+        let idFinal = "Alpha zidprev zidnext end."
+        let correctIDEntry = "{\"schema\":2,\"dictationID\":\"correct-id\",\"accepted\":\"\(idPasted)\",\"decisions\":[{\"gap\":\"model\",\"term\":\".\",\"prev\":\"zidprev\",\"next\":\"zidnext\",\"clause\":\"alpha\",\"shaped\":false,\"action\":\"keep\",\"learned\":false}]}"
+        let wrongIDEntry = "{\"schema\":2,\"dictationID\":\"wrong-id\",\"accepted\":\"\(idPasted)\",\"decisions\":[{\"gap\":\"model\",\"term\":\",\",\"prev\":\"zidprev\",\"next\":\"zidnext\",\"clause\":\"alpha\",\"shaped\":false,\"action\":\"keep\",\"learned\":false}]}"
+        let idEditEntry = "{\"schema\":2,\"kind\":\"postEdit\",\"dictationID\":\"correct-id\",\"pasted\":\"\(idPasted)\",\"final\":\"\(idFinal)\"}"
         let editEntry = "{\"schema\":1,\"kind\":\"postEdit\",\"pasted\":\"\(pasted)\",\"final\":\"\(final)\"}"
-        try? (acceptedEntry + "\n" + editEntry + "\n").write(
+        try? ([acceptedEntry, correctIDEntry, wrongIDEntry, editEntry, idEditEntry].joined(separator: "\n") + "\n").write(
             to: PunctuationLearning.trainingLogURL,
             atomically: true,
             encoding: .utf8
@@ -265,6 +270,18 @@ struct PunctuationLearningTests {
             print("FAIL: correction policy rebuild did not recover post-edit evidence: \(String(describing: preferred))")
             exit(EXIT_FAILURE)
         }
+        let idPreferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+            input: .period,
+            previousWord: "zidprev",
+            nextWord: "zidnext",
+            clauseFirst: "alpha",
+            shaped: false
+        )
+        guard idPreferred == PunctuationLearning.BoundaryLabel.none else {
+            print("FAIL: rebuild did not use dictation IDs to disambiguate repeated text: \(String(describing: idPreferred))")
+            exit(EXIT_FAILURE)
+        }
+
         guard let policyData = try? Data(contentsOf: PunctuationLearning.CorrectionPolicy.storeURL),
               let root = try? JSONSerialization.jsonObject(with: policyData) as? [String: Any],
               root["version"] as? Int == 2,
