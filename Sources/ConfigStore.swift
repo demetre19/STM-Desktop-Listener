@@ -21,7 +21,9 @@ enum AppPaths {
     }
 
     static var logURL: URL {
-        let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+        let libraryDirectory = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
+            ?? applicationSupport.deletingLastPathComponent()
+        let dir = libraryDirectory
             .appendingPathComponent("Logs", isDirectory: true)
             .appendingPathComponent(appName, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
