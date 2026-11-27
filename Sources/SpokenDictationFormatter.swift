@@ -543,9 +543,14 @@ enum SpokenDictationFormatter {
                 length: candidateText.length - NSMaxRange(candidateWords.last!.range)
             )
             // Symbols such as `++` are not punctuation, but they are still meaningful source
-            // text. Preserve them and then accept the model's terminal punctuation.
+            // text. Preserve them and then accept the model's terminal punctuation. When the
+            // deterministic fallback uses the same text as source and candidate, do not copy
+            // that shared suffix twice.
+            let candidateSuffix = candidateText.substring(with: candidateSuffixRange)
             result.append(sourceSuffix)
-            result.append(candidateText.substring(with: candidateSuffixRange))
+            if candidateSuffix != sourceSuffix {
+                result.append(candidateSuffix)
+            }
         } else {
             result.append(sourceSuffix)
         }

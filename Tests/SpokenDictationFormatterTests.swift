@@ -181,6 +181,12 @@ struct SpokenDictationFormatterTests {
                 "Please use C.",
                 "Please use C++."
             ),
+            (
+                "identical fallback text does not duplicate trailing symbols",
+                "please use C++",
+                "please use C++",
+                "please use C++."
+            ),
         ]
         let substitutionCases: [(name: String, substitutions: [String: String], input: String, expected: String)] = [
             (
