@@ -1,3 +1,5 @@
+import Foundation
+
 #if canImport(Darwin)
 import Darwin
 #else
@@ -7,6 +9,8 @@ import Glibc
 @main
 struct PunctuationLearningTests {
     static func main() {
+        testLedgerReplayIgnoresLearnedDecisions()
+
         let relatedCases: [(name: String, pasted: String, final: String, expected: Bool)] = [
             (
                 "early punctuation correction remains related",
@@ -49,6 +53,37 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 1) cases passed")
+    }
+
+    private static func testLedgerReplayIgnoresLearnedDecisions() {
+        let policyBackup = try? Data(contentsOf: PunctuationLearning.Policy.storeURL)
+        let ledgerBackup = try? Data(contentsOf: PunctuationLearning.trainingLogURL)
+        defer {
+            try? FileManager.default.removeItem(at: PunctuationLearning.Policy.storeURL)
+            try? FileManager.default.removeItem(at: PunctuationLearning.trainingLogURL)
+            if let policyBackup {
+                try? policyBackup.write(to: PunctuationLearning.Policy.storeURL, options: .atomic)
+            }
+            if let ledgerBackup {
+                try? ledgerBackup.write(to: PunctuationLearning.trainingLogURL, options: .atomic)
+            }
+        }
+
+        try? FileManager.default.removeItem(at: PunctuationLearning.Policy.storeURL)
+        let entry = #"{"schema":1,"decisions":[{"gap":"model","term":".","prev":"and","next":"then","clause":"alpha","shaped":false,"action":"merge","learned":true}]}"# + "\n"
+        try? String(repeating: entry, count: 20).write(to: PunctuationLearning.trainingLogURL, atomically: true, encoding: .utf8)
+        PunctuationLearning.Policy.shared.warm()
+        let vote = PunctuationLearning.Policy.shared.vote(
+            terminator: ".",
+            previousWord: "and",
+            nextWord: "then",
+            clauseFirst: "alpha",
+            shaped: false
+        )
+        guard vote == nil else {
+            print("FAIL: ledger replay counted learned decisions as independent evidence")
+            exit(EXIT_FAILURE)
+        }
     }
 }
