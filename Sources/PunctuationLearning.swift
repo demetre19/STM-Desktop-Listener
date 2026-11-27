@@ -115,8 +115,7 @@ enum PunctuationLearning {
         return decayed
     }
 
-    /// Correction-grounded multiclass boundary policy. Unlike `Policy`, this store is fed only
-    /// Correction-grounded multiclass boundary policy. Unlike `Policy`, this store is fed only
+    /// Correction-grounded multiclass boundary policy. This store is fed only
     /// by pasted→final user corrections, never by the system's own heuristic decisions.
     final class CorrectionPolicy {
         static let shared = CorrectionPolicy()
@@ -500,19 +499,24 @@ enum PunctuationLearning {
         return .comma
     }
 
-    private static func gapTexts(words: [CorrectionWord], in text: String) -> (interior: [String], terminal: String) {
+    private static func gapTexts(
+        words: [CorrectionWord],
+        in text: String,
+        terminalEnd: Int? = nil
+    ) -> (interior: [String], terminal: String) {
         let nsText = text as NSString
+        let terminalLimit = terminalEnd ?? nsText.length
         var interior: [String] = []
         guard words.count > 1 else {
             let end = words.first?.end ?? 0
-            return ([], end < nsText.length ? nsText.substring(from: end) : "")
+            return ([], end < terminalLimit ? nsText.substring(with: NSRange(location: end, length: terminalLimit - end)) : "")
         }
         for index in 0..<(words.count - 1) {
             let range = NSRange(location: words[index].end, length: words[index + 1].start - words[index].end)
             interior.append(nsText.substring(with: range))
         }
         let end = words[words.count - 1].end
-        return (interior, end < nsText.length ? nsText.substring(from: end) : "")
+        return (interior, end < terminalLimit ? nsText.substring(with: NSRange(location: end, length: terminalLimit - end)) : "")
     }
 
     private static func pastedClauseStart(
@@ -557,14 +561,35 @@ enum PunctuationLearning {
         decisions: [GapDecision]
     ) -> [CorrectionObservation] {
         let pastedWords = correctionWords(in: pasted)
-        let finalWords = correctionWords(in: final)
-        guard !pastedWords.isEmpty,
-              pastedWords.count == finalWords.count,
-              zip(pastedWords, finalWords).allSatisfy({ $0.text == $1.text })
-        else { return [] }
+        let allFinalWords = correctionWords(in: final)
+        guard !pastedWords.isEmpty, allFinalWords.count >= pastedWords.count else { return [] }
+
+        // Dictation is often pasted into a field that already contains text. Find the pasted
+        // word sequence as a unique contiguous run inside the focused field; punctuation and
+        // capitalization do not affect the word tokens. If the sequence is absent or ambiguous,
+        // abstain rather than inventing labels.
+        var matches: [Int] = []
+        if allFinalWords.count == pastedWords.count {
+            if zip(pastedWords, allFinalWords).allSatisfy({ $0.text == $1.text }) {
+                matches.append(0)
+            }
+        } else {
+            for start in 0...(allFinalWords.count - pastedWords.count) {
+                let candidate = allFinalWords[start..<(start + pastedWords.count)]
+                if zip(pastedWords, candidate).allSatisfy({ $0.text == $1.text }) {
+                    matches.append(start)
+                }
+            }
+        }
+        guard matches.count == 1, let finalStart = matches.first else { return [] }
+        let finalWords = Array(allFinalWords[finalStart..<(finalStart + pastedWords.count)])
+        let followingIndex = finalStart + pastedWords.count
+        let terminalEnd = followingIndex < allFinalWords.count
+            ? allFinalWords[followingIndex].start
+            : (final as NSString).length
 
         let pastedGaps = gapTexts(words: pastedWords, in: pasted)
-        let finalGaps = gapTexts(words: finalWords, in: final)
+        let finalGaps = gapTexts(words: finalWords, in: final, terminalEnd: terminalEnd)
         var observations: [CorrectionObservation] = []
         var seen: Set<String> = []
         var decisionBoundaries: Set<Int> = []

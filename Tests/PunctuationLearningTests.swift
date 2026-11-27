@@ -54,7 +54,7 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count + 8) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 9) cases passed")
     }
 
     private static func testCorrectionObservations() {
@@ -119,6 +119,30 @@ struct PunctuationLearningTests {
         )
         guard wordEditObservations.isEmpty else {
             print("FAIL: ambiguous word edit produced punctuation supervision")
+            exit(EXIT_FAILURE)
+        }
+
+        let embeddedDecision = PunctuationLearning.GapDecision(
+            gap: "model", terminator: ".", previous: "zcontext", next: "beta",
+            clauseFirst: "alpha", shaped: false, action: "keep", learned: false
+        )
+        let embeddedObservations = PunctuationLearning.correctionObservations(
+            pasted: "Alpha zcontext. Beta end.",
+            final: "Existing prefix Alpha zcontext Beta end. existing suffix",
+            decisions: [embeddedDecision]
+        )
+        guard embeddedObservations.count == 1,
+              embeddedObservations[0].desired == PunctuationLearning.BoundaryLabel.none else {
+            print("FAIL: correction inside surrounding field text was not isolated: \(embeddedObservations)")
+            exit(EXIT_FAILURE)
+        }
+        let ambiguousObservations = PunctuationLearning.correctionObservations(
+            pasted: "Alpha zcontext. Beta end.",
+            final: "Alpha zcontext Beta end. filler Alpha zcontext Beta end.",
+            decisions: [embeddedDecision]
+        )
+        guard ambiguousObservations.isEmpty else {
+            print("FAIL: ambiguous repeated pasted text produced correction labels")
             exit(EXIT_FAILURE)
         }
 
