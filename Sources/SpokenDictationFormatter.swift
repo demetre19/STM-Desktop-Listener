@@ -1404,7 +1404,7 @@ enum SpokenDictationFormatter {
     private static func escapedPhrase(_ phrase: String) -> String {
         NSRegularExpression.escapedPattern(for: phrase).replacingOccurrences(
             of: " ",
-            with: "(?:\\s|\u{200B})+"
+            with: "[ \\t\u{200B}]+"
         )
     }
 

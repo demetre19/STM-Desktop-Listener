@@ -669,6 +669,15 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 20) cases passed")
+        let newlineSubstitutionActual = SpokenDictationFormatter.applyingSubstitutions(
+            ["alpha beta": "GAMMA"],
+            to: "alpha\nbeta"
+        )
+        guard newlineSubstitutionActual == "alpha\nbeta" else {
+            print("FAIL: substitution matched across an existing line break: \(String(reflecting: newlineSubstitutionActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 21) cases passed")
     }
 }
