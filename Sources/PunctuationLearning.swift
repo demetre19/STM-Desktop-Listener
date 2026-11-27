@@ -5,11 +5,10 @@ import Foundation
 /// Two pieces, both local-only and bundled per machine:
 ///  - A JSONL training log (`punctuation-training.jsonl` in Application Support, mode 0600)
 ///    recording each dictation's source/accepted text and every guarded-merge decision.
-///  - `GapPolicy`: learned per-user statistics for (word-before-gap × terminator) outcomes.
-///    It accumulates keep/wrong counts from real dictations and votes on whether a stray
-///    terminator should be merged — only when evidence is strong, otherwise the existing
-///    heuristics decide. Learns speech patterns ("I" pause a lot) without popovers, servers,
-///    or user flagging.
+///  - `CorrectionPolicy`: multiclass boundary statistics distilled only from pasted→final
+///    user corrections. System decisions provide boundary context, never labels, so heuristics
+///    cannot vote for themselves. Exact evidence is backed off conservatively across clause
+///    openers and decays over time.
 enum PunctuationLearning {
 
     /// One decision the guarded merge made about a gap or terminal run.
@@ -411,8 +410,8 @@ enum PunctuationLearning {
         }
     }
 
-    /// Feeds one finished dictation into the learner: appends a JSONL record and updates the
-    /// policy. Cheap, local, and silent — call right after the final text is produced.
+    /// Feeds one finished dictation into the learner by appending a schema-v2 JSONL record.
+    /// The policy itself is updated later only when a matching user correction is captured.
     @discardableResult
     static func record(
         engine: String,
