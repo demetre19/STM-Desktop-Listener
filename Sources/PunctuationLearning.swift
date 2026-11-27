@@ -229,9 +229,6 @@ enum PunctuationLearning {
     /// policy. Cheap, local, and silent — call right after the final text is produced.
     static func record(engine: String, source: String, accepted: String, trace: Trace) {
         let decisions = trace.decisions
-        for decision in decisions {
-            Policy.shared.observe(decision)
-        }
         let payload: [String: Any] = [
             "schema": 1,
             "date": ISO8601DateFormatter().string(from: Date()),
@@ -252,6 +249,11 @@ enum PunctuationLearning {
             },
         ]
         logQueue.async {
+            // Policy loading and ledger replay can touch multi-megabyte local files. They must
+            // never sit between transcription completion and paste.
+            for decision in decisions {
+                Policy.shared.observe(decision)
+            }
             appendLogLine(payload)
         }
     }
