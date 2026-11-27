@@ -709,18 +709,28 @@ final class DictationController {
         func bounded(_ text: String) -> String {
             String(text.prefix(4000))
         }
-        var stages: [String: String] = [
-            "rawASR": bounded(rawASR),
-            "spokenCommands": bounded(spokenCommands),
-            "substituted": bounded(substituted),
-            "cleanupInput": bounded(cleanupInput),
-            "punctuationModelInput": bounded(punctuationResult.modelInput),
-        ]
+        // Delta-encode adjacent stages: deterministic passes often leave text unchanged, and
+        // storing five copies of every dictation would rotate the bounded ledger too quickly.
+        // A missing stage means byte-identical to the preceding stage in this fixed order.
+        var stages: [String: String] = ["rawASR": bounded(rawASR)]
+        var previousStage = rawASR
+        for (name, text) in [
+            ("spokenCommands", spokenCommands),
+            ("substituted", substituted),
+            ("cleanupInput", cleanupInput),
+            ("punctuationModelInput", punctuationResult.modelInput),
+        ] {
+            if text != previousStage {
+                stages[name] = bounded(text)
+            }
+            previousStage = text
+        }
         if let candidate = punctuationResult.candidate {
             stages["punctuationCandidate"] = bounded(candidate)
         }
         return [
             "chunks": learningChunkMetadata(),
+            "stageEncoding": "delta",
             "stages": stages,
         ]
     }
