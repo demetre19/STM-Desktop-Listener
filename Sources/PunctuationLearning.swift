@@ -65,10 +65,11 @@ enum PunctuationLearning {
             clauseFirst: String,
             shaped: Bool
         ) -> Bool? {
-            lock.lock()
+            // Voting is on the paste path. A cold or still-warming policy must abstain rather
+            // than wait while a multi-megabyte ledger is replayed before paste.
+            guard lock.try() else { return nil }
             defer { lock.unlock() }
-            loadLocked()
-            guard let entry = stats[key(
+            guard loaded, let entry = stats[key(
                 clauseFirst: clauseFirst,
                 previous: previousWord,
                 next: nextWord,
@@ -87,6 +88,14 @@ enum PunctuationLearning {
             if wrongShare >= 0.85 { return true }
             if entry.keep > entry.wrong * 3 { return false }
             return nil
+        }
+
+        /// Loads the policy once in the caller's background context. Dictation startup uses
+        /// this so paste-time votes usually see an already-loaded store.
+        func warm() {
+            lock.lock()
+            defer { lock.unlock() }
+            loadLocked()
         }
 
         /// Records an observed decision outcome for future votes. Policy-driven decisions are
@@ -224,6 +233,14 @@ enum PunctuationLearning {
     /// Public: settings UI reveals it, audits read it, clear deletes it.
     static let trainingLogURL = AppPaths.applicationSupport
         .appendingPathComponent("punctuation-training.jsonl")
+
+    /// Starts cold policy loading while audio is still being captured, keeping file replay off
+    /// both app launch and the final paste path.
+    static func warm() {
+        logQueue.async {
+            Policy.shared.warm()
+        }
+    }
 
     /// Feeds one finished dictation into the learner: appends a JSONL record and updates the
     /// policy. Cheap, local, and silent — call right after the final text is produced.

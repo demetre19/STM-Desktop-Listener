@@ -207,6 +207,7 @@ final class DictationController {
 
         resetTranscriptionState()
         activeTranscriptionEngine = localConfiguration.engine
+        PunctuationLearning.warm()
 
         let engine = AVAudioEngine()
         let input = engine.inputNode
