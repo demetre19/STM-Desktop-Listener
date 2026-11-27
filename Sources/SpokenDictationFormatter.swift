@@ -1369,6 +1369,13 @@ enum SpokenDictationFormatter {
                 }
             }
             guard allClosingQuotes else { return stripped + punctuation }
+            if insertionIndex > stripped.startIndex,
+               stripped[stripped.index(before: insertionIndex)].isNumber,
+               suffix.contains("\"") {
+                // A straight double quote immediately after a digit is commonly an inch mark
+                // (`12" by 24"`), not a closing quotation mark.
+                return stripped + punctuation
+            }
             return String(prefix) + punctuation + String(suffix)
         }
 

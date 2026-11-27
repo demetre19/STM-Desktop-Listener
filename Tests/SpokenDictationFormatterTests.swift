@@ -714,6 +714,15 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 25) cases passed")
+        let inchMeasurementActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "board is 12\" by 24\"",
+            to: "board is 12\" by 24\""
+        )
+        guard inchMeasurementActual == "board is 12\" by 24\"." else {
+            print("FAIL: inch mark was mistaken for a closing quote: \(String(reflecting: inchMeasurementActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 26) cases passed")
     }
 }
