@@ -1348,6 +1348,34 @@ enum SpokenDictationFormatter {
             record("keep")
             return stripped
         }
+        func appendingMissingTerminal(_ punctuation: String) -> String {
+            var trailingQuotes = 0
+            for character in stripped.reversed() {
+                guard "”’\"'".contains(character) else { break }
+                trailingQuotes += 1
+            }
+            guard trailingQuotes > 0 else { return stripped + punctuation }
+            let insertionIndex = stripped.index(stripped.endIndex, offsetBy: -trailingQuotes)
+            let prefix = stripped[..<insertionIndex]
+            let suffix = stripped[insertionIndex...]
+            let allClosingQuotes = suffix.allSatisfy { character in
+                switch character {
+                case "”":
+                    return true
+                case "\"":
+                    return prefix.contains("\"")
+                case "’":
+                    return prefix.contains("‘")
+                case "'":
+                    return prefix.contains("'")
+                default:
+                    return false
+                }
+            }
+            guard allClosingQuotes else { return stripped + punctuation }
+            return String(prefix) + punctuation + String(suffix)
+        }
+
         func recordInsertedTerminal(_ learned: Bool) {
             trace?.record(.init(
                 gap: "terminal",
@@ -1388,17 +1416,17 @@ enum SpokenDictationFormatter {
             if learnedTerminal == .period || learnedTerminal == .question || learnedTerminal == .exclamation,
                let replacement = learnedTerminal.replacementText {
                 recordInsertedTerminal(true)
-                return stripped + replacement
+                return appendingMissingTerminal(replacement)
             }
         }
         if shaped {
             recordInsertedTerminal(false)
-            return stripped + "?"
+            return appendingMissingTerminal("?")
         }
         // Recognizer text that ends on a bare word gets a period unless correction evidence
         // prefers another terminal treatment above.
         recordInsertedTerminal(false)
-        return stripped + "."
+        return appendingMissingTerminal(".")
     }
 
     private static func escapedPhrase(_ phrase: String) -> String {

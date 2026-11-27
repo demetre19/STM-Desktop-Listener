@@ -687,6 +687,24 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 22) cases passed")
+        let quotedQuestionActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "She asked “Can you zquote come”",
+            to: "she asked “can you zquote come”"
+        )
+        guard quotedQuestionActual == "She asked “can you zquote come?”" else {
+            print("FAIL: quoted question terminal was placed outside the closing quote: \(String(reflecting: quotedQuestionActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        let apostropheTerminalActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "This is zjames'",
+            to: "this is zjames'"
+        )
+        guard apostropheTerminalActual == "This is zjames'." else {
+            print("FAIL: terminal apostrophe was mistaken for a closing quote: \(String(reflecting: apostropheTerminalActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 24) cases passed")
     }
 }
