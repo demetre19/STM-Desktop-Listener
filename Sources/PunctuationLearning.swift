@@ -682,12 +682,19 @@ enum PunctuationLearning {
                 guard decision.boundaryIndex != nil
                       || pastedClauseFirst(boundaryIndex: boundaryIndex, words: pastedWords, gaps: pastedGaps.interior) == decision.clauseFirst.lowercased()
                 else { continue }
-                appendObservation(
-                    boundaryIndex: boundaryIndex,
-                    pastedGap: pastedGaps.terminal,
-                    finalGap: finalGaps.terminal,
-                    decision: decision
-                )
+                // Whitespace between the pasted segment and pre-existing following text is
+                // field structure, not a terminal punctuation edit. Newline corrections are
+                // conservative non-actions anyway, so abstain rather than mislabeling a period
+                // the user left intact as a newline desire.
+                if !(followingIndex < allFinalWords.count
+                     && (pastedGaps.terminal.contains("\n") || finalGaps.terminal.contains("\n"))) {
+                    appendObservation(
+                        boundaryIndex: boundaryIndex,
+                        pastedGap: pastedGaps.terminal,
+                        finalGap: finalGaps.terminal,
+                        decision: decision
+                    )
+                }
                 continue
             }
 
@@ -815,9 +822,12 @@ enum PunctuationLearning {
         if let dictationID {
             payload["dictationID"] = dictationID
         }
+        let immutablePayload = payload
         logQueue.async {
-            appendLogLine(payload)
+            // Read the source dictation before appending; appendLogLine can rotate a full
+            // ledger, and rotation must not erase the decision context for this correction.
             let decisions = loggedDecisions(forAccepted: pasted, dictationID: dictationID)
+            appendLogLine(immutablePayload)
             let observations = correctionObservations(pasted: pasted, final: final, decisions: decisions)
             for observation in observations {
                 CorrectionPolicy.shared.observe(

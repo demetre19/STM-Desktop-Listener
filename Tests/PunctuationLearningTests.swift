@@ -54,7 +54,7 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count + 14) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 15) cases passed")
     }
 
     private static func testCorrectionObservations() {
@@ -175,6 +175,27 @@ struct PunctuationLearningTests {
               repeatedObservations.contains(where: { $0.desired == PunctuationLearning.BoundaryLabel.none && $0.weight == 4 }),
               repeatedObservations.contains(where: { $0.desired == .period && $0.weight == 1 }) else {
             print("FAIL: repeated boundary correction was not attributed by source boundary index: \(repeatedObservations)")
+            exit(EXIT_FAILURE)
+        }
+
+        let newlineBoundaryDecision = PunctuationLearning.GapDecision(
+            gap: "model", terminator: ".", previous: "beta", next: "terminal",
+            clauseFirst: "alpha", shaped: false, action: "keep", learned: false,
+            boundaryIndex: 2
+        )
+        let newlineTerminalDecision = PunctuationLearning.GapDecision(
+            gap: "terminal", terminator: ".", previous: "end", next: "",
+            clauseFirst: "terminal", shaped: false, action: "keep", learned: false,
+            boundaryIndex: 4
+        )
+        let newlineFieldObservations = PunctuationLearning.correctionObservations(
+            pasted: "Alpha znl beta. Terminal end.",
+            final: "Prefix Alpha znl beta Terminal end.\n\nNext paragraph",
+            decisions: [newlineBoundaryDecision, newlineTerminalDecision]
+        )
+        guard newlineFieldObservations.count == 1,
+              newlineFieldObservations[0].desired == PunctuationLearning.BoundaryLabel.none else {
+            print("FAIL: existing paragraph separator produced a false terminal correction: \(newlineFieldObservations)")
             exit(EXIT_FAILURE)
         }
 
