@@ -54,7 +54,7 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count + 15) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 16) cases passed")
     }
 
     private static func testCorrectionObservations() {
@@ -211,6 +211,23 @@ struct PunctuationLearningTests {
               insertionObservations[0].next == "beta",
               insertionObservations[0].weight == 4 else {
             print("FAIL: punctuation insertion correction was not converted to none-input evidence: \(insertionObservations)")
+            exit(EXIT_FAILURE)
+        }
+
+        let insertedTerminalDecision = PunctuationLearning.GapDecision(
+            gap: "terminal", terminator: "", previous: "it", next: "",
+            clauseFirst: "can", shaped: false, action: "insert", learned: false
+        )
+        let insertedTerminalObservations = PunctuationLearning.correctionObservations(
+            pasted: "Can you send it.",
+            final: "Can you send it?",
+            decisions: [insertedTerminalDecision]
+        )
+        guard insertedTerminalObservations.count == 1,
+              insertedTerminalObservations[0].input == PunctuationLearning.BoundaryLabel.none,
+              insertedTerminalObservations[0].desired == .question,
+              insertedTerminalObservations[0].weight == 4 else {
+            print("FAIL: inserted terminal correction was not attributed to none-input evidence: \(insertedTerminalObservations)")
             exit(EXIT_FAILURE)
         }
 
