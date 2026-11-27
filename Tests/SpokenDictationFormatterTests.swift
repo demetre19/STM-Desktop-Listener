@@ -533,6 +533,24 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 11) cases passed")
+        let fallbackCommaReplacement = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "totally unrelated fallback candidate",
+            to: "Zcase zcommaprev, zcommanext finish."
+        )
+        guard fallbackCommaReplacement == "Zcase zcommaprev. Zcommanext finish." else {
+            print("FAIL: fallback comma-to-period correction did not capitalize following word: \(String(reflecting: fallbackCommaReplacement))")
+            exit(EXIT_FAILURE)
+        }
+
+        let fallbackPeriodReplacement = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "totally unrelated fallback candidate",
+            to: "Zcase zperiodprev. Zperiodnext finish."
+        )
+        guard fallbackPeriodReplacement == "Zcase zperiodprev, zperiodnext finish." else {
+            print("FAIL: fallback period-to-comma correction did not lowercase following word: \(String(reflecting: fallbackPeriodReplacement))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 13) cases passed")
     }
 }

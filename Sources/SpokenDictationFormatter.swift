@@ -327,7 +327,30 @@ enum SpokenDictationFormatter {
                 mergedBoundaryWords: &mergedBoundaryWords,
                 trace: trace
             ) {
-                result.replaceCharacters(in: gapRange, with: sanitized)
+                let followingWord = words[index + 1]
+                var adjustedWord = followingWord.text
+                let sanitizedTrimmed = sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
+                let gapHadTerminator = gap.range(of: "[.!?…]", options: .regularExpression) != nil
+                if let first = sanitizedTrimmed.first {
+                    if ".?!".contains(first), !gapHadTerminator,
+                       let wordFirst = adjustedWord.first,
+                       String(wordFirst) != String(wordFirst).uppercased() {
+                        adjustedWord = String(wordFirst).uppercased() + String(adjustedWord.dropFirst())
+                    }
+                    if (first == "," || sanitized == " "), gapHadTerminator,
+                       shouldLowercaseAfterMergedBoundary(adjustedWord) {
+                        adjustedWord = adjustedWord.lowercased()
+                    }
+                }
+                if adjustedWord != followingWord.text {
+                    let spanRange = NSRange(
+                        location: gapRange.location,
+                        length: NSMaxRange(followingWord.range) - gapRange.location
+                    )
+                    result.replaceCharacters(in: spanRange, with: sanitized + adjustedWord)
+                } else {
+                    result.replaceCharacters(in: gapRange, with: sanitized)
+                }
             }
         }
         return result as String
