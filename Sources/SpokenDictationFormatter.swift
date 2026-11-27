@@ -514,6 +514,7 @@ enum SpokenDictationFormatter {
                         words: candidateWords,
                         in: candidateText,
                         prosodicBoundary: sourceGap.contains(prosodyMarker),
+                        sourceBoundaryIndex: index,
                         trace: trace
                     ) {
                         if sanitized == " ", gap.range(of: "[.!?…]", options: .regularExpression) != nil {
@@ -614,7 +615,8 @@ enum SpokenDictationFormatter {
             clauseFirst: clauseFirst,
             shaped: shaped,
             action: "insert",
-            learned: true
+            learned: true,
+            boundaryIndex: previousIndex
         ))
         return replacement + " "
     }
@@ -641,6 +643,7 @@ enum SpokenDictationFormatter {
         words: [(text: String, range: NSRange)],
         in candidate: NSString,
         prosodicBoundary: Bool = false,
+        sourceBoundaryIndex: Int? = nil,
         trace: PunctuationLearning.Trace? = nil
     ) -> String? {
         let trimmed = gap.trimmingCharacters(in: .whitespaces)
@@ -655,7 +658,8 @@ enum SpokenDictationFormatter {
                 clauseFirst: words[clauseStartIndex(before: previousIndex, words: words, in: candidate)].text.lowercased(),
                 shaped: clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: candidate),
                 action: action,
-                learned: learned
+                learned: learned,
+                boundaryIndex: sourceBoundaryIndex
             ))
         }
 
@@ -770,7 +774,8 @@ enum SpokenDictationFormatter {
                 clauseFirst: words[clauseStartIndex(before: previousIndex, words: words, in: sourceText)].text.lowercased(),
                 shaped: clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: sourceText),
                 action: action,
-                learned: learned
+                learned: learned,
+                boundaryIndex: previousIndex
             ))
         }
 
@@ -1184,6 +1189,7 @@ enum SpokenDictationFormatter {
         let shaped = regexShaped || PunctuationLearning.clauseWordsAreQuestionShaped(clauseWords)
 
         let finalWords = wordMatches(in: finalClause)
+        let terminalBoundaryIndex = wordMatches(in: stripped).count - 1
 
         if let terminal = stripped.range(of: #"[.!?…]+(?=[”’"')\]]*\s*$)"#, options: .regularExpression) {
             func record(_ action: String, learned: Bool = false) {
@@ -1195,7 +1201,8 @@ enum SpokenDictationFormatter {
                     clauseFirst: finalWords.first?.text.lowercased() ?? "",
                     shaped: shaped,
                     action: action,
-                    learned: learned
+                    learned: learned,
+                    boundaryIndex: terminalBoundaryIndex
                 ))
             }
             if !terminalIsSpoken {

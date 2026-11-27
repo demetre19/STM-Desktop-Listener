@@ -54,7 +54,7 @@ struct PunctuationLearningTests {
             }
         }
 
-        print("PunctuationLearningTests: all \(relatedCases.count + 12) cases passed")
+        print("PunctuationLearningTests: all \(relatedCases.count + 13) cases passed")
     }
 
     private static func testCorrectionObservations() {
@@ -153,6 +153,28 @@ struct PunctuationLearningTests {
         )
         guard ambiguousObservations.isEmpty else {
             print("FAIL: ambiguous repeated pasted text produced correction labels")
+            exit(EXIT_FAILURE)
+        }
+
+        let repeatedFirstDecision = PunctuationLearning.GapDecision(
+            gap: "model", terminator: ".", previous: "x", next: "beta",
+            clauseFirst: "alpha", shaped: false, action: "keep", learned: false,
+            boundaryIndex: 1
+        )
+        let repeatedSecondDecision = PunctuationLearning.GapDecision(
+            gap: "model", terminator: ".", previous: "x", next: "beta",
+            clauseFirst: "alpha", shaped: false, action: "keep", learned: false,
+            boundaryIndex: 4
+        )
+        let repeatedObservations = PunctuationLearning.correctionObservations(
+            pasted: "Alpha x. Beta alpha x. Beta end.",
+            final: "Alpha x beta alpha x. Beta end.",
+            decisions: [repeatedFirstDecision, repeatedSecondDecision]
+        )
+        guard repeatedObservations.count == 2,
+              repeatedObservations.contains(where: { $0.desired == PunctuationLearning.BoundaryLabel.none && $0.weight == 4 }),
+              repeatedObservations.contains(where: { $0.desired == .period && $0.weight == 1 }) else {
+            print("FAIL: repeated boundary correction was not attributed by source boundary index: \(repeatedObservations)")
             exit(EXIT_FAILURE)
         }
 

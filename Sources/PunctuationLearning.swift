@@ -22,6 +22,7 @@ enum PunctuationLearning {
         var shaped: Bool       // clause scanned as question-shaped by the heuristics
         var action: String     // "keep" | "merge" | "demote" | "promote" | "space"
         var learned: Bool      // a policy vote (not heuristics) decided this
+        var boundaryIndex: Int? = nil // source-word boundary; terminal uses the final word index
     }
 
     /// Multiclass boundary outcome learned from user corrections. `none` means no punctuation
@@ -430,7 +431,7 @@ enum PunctuationLearning {
             "source": source,
             "accepted": accepted,
             "decisions": decisions.map { decision -> [String: Any] in
-                [
+                var encoded: [String: Any] = [
                     "gap": decision.gap,
                     "term": decision.terminator,
                     "prev": decision.previous,
@@ -440,6 +441,10 @@ enum PunctuationLearning {
                     "action": decision.action,
                     "learned": decision.learned,
                 ]
+                if let boundaryIndex = decision.boundaryIndex {
+                    encoded["boundary"] = boundaryIndex
+                }
+                return encoded
             },
         ]
         if !metadata.isEmpty {
@@ -668,8 +673,14 @@ enum PunctuationLearning {
         for decision in decisions {
             if decision.next.isEmpty {
                 let boundaryIndex = pastedWords.count - 1
-                guard pastedWords[boundaryIndex].text == decision.previous.lowercased(),
-                      pastedClauseFirst(boundaryIndex: boundaryIndex, words: pastedWords, gaps: pastedGaps.interior) == decision.clauseFirst.lowercased()
+                let explicitIndexMatches = decision.boundaryIndex == nil || decision.boundaryIndex == boundaryIndex
+                guard explicitIndexMatches,
+                      pastedWords[boundaryIndex].text == decision.previous.lowercased()
+                else { continue }
+                // New schema-v2 decisions carry their source boundary, so clause-openers do not
+                // need to be recomputed from punctuation that the decision itself may have changed.
+                guard decision.boundaryIndex != nil
+                      || pastedClauseFirst(boundaryIndex: boundaryIndex, words: pastedWords, gaps: pastedGaps.interior) == decision.clauseFirst.lowercased()
                 else { continue }
                 appendObservation(
                     boundaryIndex: boundaryIndex,
@@ -680,6 +691,23 @@ enum PunctuationLearning {
                 continue
             }
 
+            if let indexedBoundary = decision.boundaryIndex,
+               indexedBoundary >= 0,
+               indexedBoundary < pastedWords.count - 1 {
+                guard pastedWords[indexedBoundary].text == decision.previous.lowercased(),
+                      pastedWords[indexedBoundary + 1].text == decision.next.lowercased()
+                else { continue }
+                appendObservation(
+                    boundaryIndex: indexedBoundary,
+                    pastedGap: pastedGaps.interior[indexedBoundary],
+                    finalGap: finalGaps.interior[indexedBoundary],
+                    decision: decision
+                )
+                continue
+            }
+
+            // Legacy schema-v1 ledgers have no boundary index. Fall back to the conservative
+            // word/context match used when they were written.
             for boundaryIndex in 0..<(pastedWords.count - 1) {
                 guard pastedWords[boundaryIndex].text == decision.previous.lowercased(),
                       pastedWords[boundaryIndex + 1].text == decision.next.lowercased(),
@@ -735,7 +763,8 @@ enum PunctuationLearning {
                 clauseFirst: raw["clause"] as? String ?? "",
                 shaped: raw["shaped"] as? Bool ?? false,
                 action: action,
-                learned: raw["learned"] as? Bool ?? false
+                learned: raw["learned"] as? Bool ?? false,
+                boundaryIndex: (raw["boundary"] as? NSNumber)?.intValue
             )
         }
     }
