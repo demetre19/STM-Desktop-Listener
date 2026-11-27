@@ -110,6 +110,7 @@ enum PunctuationLearning {
         }
 
         private func observeLocked(_ decision: GapDecision) {
+            guard !decision.learned, !decision.terminator.isEmpty else { return }
             var wrong = false
             switch decision.action {
             case "keep":
