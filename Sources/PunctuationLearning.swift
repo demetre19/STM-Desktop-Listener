@@ -172,9 +172,10 @@ enum PunctuationLearning {
                 guard let winner = ranked.first else { continue }
                 let runnerUp = ranked.dropFirst().first?.value ?? 0
                 let total = ranked.reduce(0) { $0 + $1.value }
-                let requirements = (minimumTotal: Double(3 + level * 3), margin: Double(2 + level), share: 0.75 + Double(level) * 0.05)
+                let minimumMass = level == 0 ? 2.5 : Double(3 + level * 3)
+                let requirements = (minimumTotal: minimumMass, margin: Double(2 + level), share: 0.75 + Double(level) * 0.05)
                 guard total >= requirements.minimumTotal,
-                      winner.value >= 3,
+                      winner.value >= minimumMass,
                       winner.value >= runnerUp + requirements.margin,
                       Double(winner.value) / Double(total) >= requirements.share else { continue }
                 return winner.key
