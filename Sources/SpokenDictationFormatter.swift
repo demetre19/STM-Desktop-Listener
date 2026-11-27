@@ -1305,15 +1305,53 @@ enum SpokenDictationFormatter {
             record("keep")
             return stripped
         }
+        func recordInsertedTerminal(_ learned: Bool) {
+            trace?.record(.init(
+                gap: "terminal",
+                terminator: "",
+                previous: finalWords.last?.text.lowercased() ?? "",
+                next: "",
+                clauseFirst: finalWords.first?.text.lowercased() ?? "",
+                shaped: shaped,
+                action: "insert",
+                learned: learned,
+                boundaryIndex: terminalBoundaryIndex
+            ))
+        }
+
+        let terminalPreviousWord = finalWords.last?.text.lowercased() ?? ""
+        var learnedTerminal: PunctuationLearning.BoundaryLabel?
+        if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .none, previousWord: terminalPreviousWord) {
+            learnedTerminal = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: .none,
+                previousWord: terminalPreviousWord,
+                nextWord: "",
+                clauseFirst: finalWords.first?.text.lowercased() ?? "",
+                shaped: shaped
+            )
+        }
+        if let learnedTerminal {
+            if learnedTerminal == PunctuationLearning.BoundaryLabel.none {
+                recordInsertedTerminal(true)
+                return stripped
+            }
+            if learnedTerminal == .period || learnedTerminal == .question || learnedTerminal == .exclamation,
+               let replacement = learnedTerminal.replacementText {
+                recordInsertedTerminal(true)
+                return stripped + replacement
+            }
+        }
         if shaped {
+            recordInsertedTerminal(false)
             return stripped + "?"
         }
         if stripped.range(
             of: #"[,;:…”’"')\]\s]$"#,
             options: .regularExpression
         ) == nil {
-            // Recognizer text that ends on a bare word gets a period; dictation output should
-            // not trail off unpunctuated.
+            // Recognizer text that ends on a bare word gets a period unless correction evidence
+            // prefers another terminal treatment above.
+            recordInsertedTerminal(false)
             return stripped + "."
         }
         return stripped

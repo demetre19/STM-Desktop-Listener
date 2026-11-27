@@ -551,6 +551,27 @@ struct SpokenDictationFormatterTests {
             exit(EXIT_FAILURE)
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 13) cases passed")
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .none,
+            desired: .question,
+            previousWord: "zterminalmissing",
+            nextWord: "",
+            clauseFirst: "zcase",
+            shaped: false,
+            weight: 3
+        )
+        let terminalInsertionTrace = PunctuationLearning.Trace()
+        let terminalInsertionActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zcase zterminalmissing",
+            to: "Zcase zterminalmissing",
+            trace: terminalInsertionTrace
+        )
+        guard terminalInsertionActual == "Zcase zterminalmissing?",
+              terminalInsertionTrace.decisions.contains(where: { $0.action == "insert" && $0.learned && $0.terminator.isEmpty }) else {
+            print("FAIL: learned terminal insertion did not use none-input evidence: \(String(reflecting: terminalInsertionActual)) \(terminalInsertionTrace.decisions)")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 14) cases passed")
     }
 }
