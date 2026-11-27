@@ -142,6 +142,17 @@ enum SpokenDictationFormatter {
         return text
     }
 
+    /// Edge-Punct is trained on whitespace-separated, lowercase, unpunctuated transcript
+    /// words. Feeding recognizer punctuation, casing, newlines, or explicit-command markers
+    /// changes the whitespace tokens themselves and puts the model outside its input contract.
+    /// This projection is only for the model; the original text remains the merge source so
+    /// recognizer punctuation and explicit commands are still preserved as evidence.
+    static func normalizingForPunctuationModel(_ text: String) -> String {
+        wordMatches(in: text)
+            .map { $0.text.lowercased() }
+            .joined(separator: " ")
+    }
+
     static func applyingAutomaticPunctuation(
         candidate: String,
         to original: String,

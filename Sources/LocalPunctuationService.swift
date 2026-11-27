@@ -12,9 +12,12 @@ enum LocalPunctuationService {
             return SpokenDictationFormatter.applyingAutomaticPunctuation(candidate: text, to: text, trace: trace)
         }
 
+        let modelInput = SpokenDictationFormatter.normalizingForPunctuationModel(text)
+        let inferenceInput = modelInput.isEmpty ? text : modelInput
+
         var errorPointer: UnsafeMutablePointer<CChar>?
         let candidatePointer = modelDirectory.path.withCString { modelPath in
-            text.withCString { inputText in
+            inferenceInput.withCString { inputText in
                 STMAddPunctuation(modelPath, inputText, &errorPointer)
             }
         }

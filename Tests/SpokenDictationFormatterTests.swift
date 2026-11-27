@@ -208,6 +208,18 @@ struct SpokenDictationFormatterTests {
                 "nothing changes here"
             ),
         ]
+        let normalizationCases: [(name: String, input: String, expected: String)] = [
+            (
+                "model input strips punctuation casing newlines and command markers",
+                "How are you?\nI am fine.\u{FE00} MAILGUN",
+                "how are you i am fine mailgun"
+            ),
+            (
+                "model input preserves word order and numbers",
+                "First, SEND 2 copies!",
+                "first send 2 copies"
+            ),
+        ]
         let pipelineCases: [(name: String, input: String, candidate: String, expected: String)] = [
             (
                 "newline command survives punctuation model flattening",
@@ -277,6 +289,18 @@ struct SpokenDictationFormatterTests {
             }
         }
 
+        for testCase in normalizationCases {
+            let actual = SpokenDictationFormatter.normalizingForPunctuationModel(testCase.input)
+            guard actual == testCase.expected else {
+                print(
+                    "FAIL: \(testCase.name)\n" +
+                        "  expected: \(String(reflecting: testCase.expected))\n" +
+                        "  actual:   \(String(reflecting: actual))"
+                )
+                exit(EXIT_FAILURE)
+            }
+        }
+
         for testCase in pipelineCases {
             let commandFormatted = SpokenDictationFormatter.applyingSpokenCommands(to: testCase.input)
             let actual = SpokenDictationFormatter.applyingAutomaticPunctuation(
@@ -293,6 +317,6 @@ struct SpokenDictationFormatterTests {
             }
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count) cases passed")
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count) cases passed")
     }
 }
