@@ -34,3 +34,12 @@ swiftc -typecheck -parse-as-library \
   "$ROOT/Sources/ConfigStore.swift" \
   "$ROOT/Sources/Logger.swift" \
   "$ROOT/Tests/LinuxSupport.swift"
+# macOS-only sources cannot be typechecked on Linux, but `-parse` still catches syntax and
+# delimiter regressions in files touched by the punctuation pipeline.
+for source in \
+  "$ROOT/Sources/DictationController.swift" \
+  "$ROOT/Sources/AppDelegate.swift" \
+  "$ROOT/Sources/SettingsWindowController.swift"; do
+  swiftc -parse "$source" >/dev/null
+done
+

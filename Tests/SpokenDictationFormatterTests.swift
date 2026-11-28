@@ -11,6 +11,7 @@ struct SpokenDictationFormatterTests {
             ("comma", "Hello comma world", "Hello, world"),
             ("sentence punctuation", "Are you there question mark Yes exclamation point", "Are you there? Yes!"),
             ("new line", "First line new line Second line", "First line\nSecond line"),
+            ("quiet marker does not split new line command", "First line new\u{200B} line Second line", "First line\nSecond line"),
             ("newline", "First line newline Second line", "First line\nSecond line"),
             ("go to a new line", "First line go to a new line Second line", "First line\nSecond line"),
             ("start a new line", "First line start a new line Second line", "First line\nSecond line"),
@@ -182,6 +183,12 @@ struct SpokenDictationFormatterTests {
                 "Please use C++."
             ),
             (
+                "meaningful interior symbols survive model normalization",
+                "please use c++ templates today",
+                "Please use c templates today.",
+                "Please use c++ templates today."
+            ),
+            (
                 "identical fallback text does not duplicate trailing symbols",
                 "please use C++",
                 "please use C++",
@@ -235,6 +242,11 @@ struct SpokenDictationFormatterTests {
                 "model input preserves contractions and meaningful symbols",
                 "I don't use C++.",
                 "i don't use c++"
+            ),
+            (
+                "model input strips prosody markers",
+                "hello\u{200B} world",
+                "hello world"
             ),
         ]
         let pipelineCases: [(name: String, input: String, candidate: String, expected: String)] = [
@@ -334,6 +346,383 @@ struct SpokenDictationFormatterTests {
             }
         }
 
-        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count) cases passed")
+        let prosodicJoined = SpokenDictationFormatter.joiningChunks(
+            ["first part.", "and then."],
+            prosodyBoundaryAfter: [0]
+        )
+        guard prosodicJoined.contains(SpokenDictationFormatter.prosodyMarker),
+              !SpokenDictationFormatter.strippingSpokenMarkers(prosodicJoined).contains(SpokenDictationFormatter.prosodyMarker) else {
+            print("FAIL: quiet-boundary prosody marker was not inserted and stripped safely")
+            exit(EXIT_FAILURE)
+        }
+
+        let prosodyTerminatorActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "I was going and. Then left.",
+            to: "I was going and\u{200B} then left"
+        )
+        guard prosodyTerminatorActual == "I was going and. Then left.",
+              !prosodyTerminatorActual.contains(SpokenDictationFormatter.prosodyMarker) else {
+            print("FAIL: quiet boundary did not preserve agreeing lexical terminator: \(String(reflecting: prosodyTerminatorActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        let prosodyCommaActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "I want it, inside the one.",
+            to: "I want it\u{200B} inside the one"
+        )
+        guard prosodyCommaActual == "I want it, inside the one." else {
+            print("FAIL: quiet boundary did not preserve agreeing lexical comma: \(String(reflecting: prosodyCommaActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .period,
+            desired: PunctuationLearning.BoundaryLabel.none,
+            previousWord: "and",
+            nextWord: "zthen",
+            clauseFirst: "zprosody",
+            shaped: false,
+            weight: 4
+        )
+        let correctionOverridesProsody = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zprosody and. Zthen finish.",
+            to: "Zprosody and\u{200B} zthen finish"
+        )
+        guard correctionOverridesProsody == "Zprosody and zthen finish." else {
+            print("FAIL: user correction did not override prosody fusion: \(String(reflecting: correctionOverridesProsody))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .period,
+            desired: PunctuationLearning.BoundaryLabel.none,
+            previousWord: "zomega",
+            nextWord: "then",
+            clauseFirst: "zalpha",
+            shaped: false,
+            weight: 3
+        )
+        let learnedTrace = PunctuationLearning.Trace()
+        let learnedActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zalpha zomega. Then beta.",
+            to: "Zalpha zomega. Then beta.",
+            trace: learnedTrace
+        )
+        guard learnedActual == "Zalpha zomega then beta.",
+              learnedTrace.decisions.contains(where: { $0.action == "merge" && $0.learned }) else {
+            print(
+                "FAIL: correction-grounded merge did not override fallback punctuation\n" +
+                    "  actual:   \(String(reflecting: learnedActual))\n" +
+                    "  decisions: \(learnedTrace.decisions)"
+            )
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .period,
+            desired: .question,
+            previousWord: "zreplace",
+            nextWord: "next",
+            clauseFirst: "zstart",
+            shaped: false,
+            weight: 3
+        )
+        let replacementActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zstart zreplace. Next finish.",
+            to: "Zstart zreplace. Next finish."
+        )
+        guard replacementActual.contains("zreplace?") else {
+            print("FAIL: correction-grounded terminator replacement missing: \(String(reflecting: replacementActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .period,
+            desired: .question,
+            previousWord: "zterminal",
+            nextWord: "",
+            clauseFirst: "please",
+            shaped: false,
+            weight: 3
+        )
+        let terminalTrace = PunctuationLearning.Trace()
+        let terminalActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Please zterminal.",
+            to: "Please zterminal.",
+            trace: terminalTrace
+        )
+        guard terminalActual == "Please zterminal?",
+              terminalTrace.decisions.contains(where: { $0.gap == "terminal" && $0.action == "replace" && $0.learned }) else {
+            print(
+                "FAIL: correction-grounded terminal replacement missing\n" +
+                    "  actual:   \(String(reflecting: terminalActual))\n" +
+                    "  decisions: \(terminalTrace.decisions)"
+            )
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: PunctuationLearning.BoundaryLabel.none,
+            desired: .comma,
+            previousWord: "zadd",
+            nextWord: "znext",
+            clauseFirst: "zstart",
+            shaped: false,
+            weight: 3
+        )
+        let insertionTrace = PunctuationLearning.Trace()
+        let insertionActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zstart zadd znext finish.",
+            to: "Zstart zadd znext finish.",
+            trace: insertionTrace
+        )
+        guard insertionActual == "Zstart zadd, znext finish.",
+              insertionTrace.decisions.contains(where: { $0.action == "insert" && $0.learned }) else {
+            print(
+                "FAIL: correction-grounded punctuation insertion missing\n" +
+                    "  actual:   \(String(reflecting: insertionActual))\n" +
+                    "  decisions: \(insertionTrace.decisions)"
+            )
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .none,
+            desired: .period,
+            previousWord: "zstop",
+            nextWord: "zresume",
+            clauseFirst: "zcase",
+            shaped: false,
+            weight: 3
+        )
+        let sentenceInsertionActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zcase zstop zresume finish.",
+            to: "Zcase zstop zresume finish."
+        )
+        guard sentenceInsertionActual == "Zcase zstop. Zresume finish." else {
+            print("FAIL: learned sentence insertion did not capitalize following word: \(String(reflecting: sentenceInsertionActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .comma,
+            desired: .period,
+            previousWord: "zcommaprev",
+            nextWord: "zcommanext",
+            clauseFirst: "zcase",
+            shaped: false,
+            weight: 3
+        )
+        let commaReplacementActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zcase zcommaprev, zcommanext finish.",
+            to: "Zcase zcommaprev, zcommanext finish."
+        )
+        guard commaReplacementActual == "Zcase zcommaprev. Zcommanext finish." else {
+            print("FAIL: comma-to-period correction did not capitalize following word: \(String(reflecting: commaReplacementActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .period,
+            desired: .comma,
+            previousWord: "zperiodprev",
+            nextWord: "zperiodnext",
+            clauseFirst: "zcase",
+            shaped: false,
+            weight: 3
+        )
+        let periodReplacementActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zcase zperiodprev. Zperiodnext finish.",
+            to: "Zcase zperiodprev. Zperiodnext finish."
+        )
+        guard periodReplacementActual == "Zcase zperiodprev, zperiodnext finish." else {
+            print("FAIL: period-to-comma correction did not lowercase following word: \(String(reflecting: periodReplacementActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        let fallbackCommaReplacement = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "totally unrelated fallback candidate",
+            to: "Zcase zcommaprev, zcommanext finish."
+        )
+        guard fallbackCommaReplacement == "Zcase zcommaprev. Zcommanext finish." else {
+            print("FAIL: fallback comma-to-period correction did not capitalize following word: \(String(reflecting: fallbackCommaReplacement))")
+            exit(EXIT_FAILURE)
+        }
+
+        let fallbackPeriodReplacement = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "totally unrelated fallback candidate",
+            to: "Zcase zperiodprev. Zperiodnext finish."
+        )
+        guard fallbackPeriodReplacement == "Zcase zperiodprev, zperiodnext finish." else {
+            print("FAIL: fallback period-to-comma correction did not lowercase following word: \(String(reflecting: fallbackPeriodReplacement))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .none,
+            desired: .question,
+            previousWord: "zterminalmissing",
+            nextWord: "",
+            clauseFirst: "zcase",
+            shaped: false,
+            weight: 3
+        )
+        let terminalInsertionTrace = PunctuationLearning.Trace()
+        let terminalInsertionActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zcase zterminalmissing",
+            to: "Zcase zterminalmissing",
+            trace: terminalInsertionTrace
+        )
+        guard terminalInsertionActual == "Zcase zterminalmissing?",
+              terminalInsertionTrace.decisions.contains(where: { $0.action == "insert" && $0.learned && $0.terminator.isEmpty }) else {
+            print("FAIL: learned terminal insertion did not use none-input evidence: \(String(reflecting: terminalInsertionActual)) \(terminalInsertionTrace.decisions)")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .none,
+            desired: .comma,
+            previousWord: "c",
+            nextWord: "templates",
+            clauseFirst: "please",
+            shaped: false,
+            weight: 3
+        )
+        let symbolInsertionActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Please use c templates today.",
+            to: "please use c++ templates today"
+        )
+        guard symbolInsertionActual == "Please use c++, templates today." else {
+            print("FAIL: learned insertion erased interior symbols: \(String(reflecting: symbolInsertionActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .none,
+            desired: .comma,
+            previousWord: "zshapeadd",
+            nextWord: "zshapenext",
+            clauseFirst: "zshape",
+            shaped: true,
+            weight: 3
+        )
+        let shapeFallbackActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Zshape zshapeadd zshapenext finish.",
+            to: "Zshape zshapeadd zshapenext finish."
+        )
+        guard shapeFallbackActual == "Zshape zshapeadd, zshapenext finish." else {
+            print("FAIL: insertion evidence was dropped when heuristic shape bucket changed: \(String(reflecting: shapeFallbackActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .period,
+            desired: PunctuationLearning.BoundaryLabel.none,
+            previousWord: "zplus",
+            nextWord: "and",
+            clauseFirst: "use",
+            shaped: false,
+            weight: 3
+        )
+        let sanitizedSymbolActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Use zplus. And templates.",
+            to: "use zplus++ and templates"
+        )
+        guard sanitizedSymbolActual == "Use zplus++ and templates." else {
+            print("FAIL: sanitized learned replacement erased interior symbols: \(String(reflecting: sanitizedSymbolActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .none,
+            desired: .exclamation,
+            previousWord: "zspokenend",
+            nextWord: "",
+            clauseFirst: "use",
+            shaped: false,
+            weight: 3
+        )
+        let spokenTerminalCommaActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Use zspokenend,",
+            to: "use zspokenend,\u{FE00}"
+        )
+        guard spokenTerminalCommaActual == "Use zspokenend," else {
+            print("FAIL: learned terminal insertion appended punctuation after a spoken comma: \(String(reflecting: spokenTerminalCommaActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        PunctuationLearning.CorrectionPolicy.shared.observe(
+            input: .none,
+            desired: .comma,
+            previousWord: "zshapeleak",
+            nextWord: "alpha",
+            clauseFirst: "how",
+            shaped: true,
+            weight: 10
+        )
+        let oppositeShapeBackoffActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Well zshapeleak beta.",
+            to: "well zshapeleak beta"
+        )
+        guard oppositeShapeBackoffActual == "Well zshapeleak beta." else {
+            print("FAIL: opposite-shape insertion used broad previous-word backoff: \(String(reflecting: oppositeShapeBackoffActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        let newlineSubstitutionActual = SpokenDictationFormatter.applyingSubstitutions(
+            ["alpha beta": "GAMMA"],
+            to: "alpha\nbeta"
+        )
+        guard newlineSubstitutionActual == "alpha\nbeta" else {
+            print("FAIL: substitution matched across an existing line break: \(String(reflecting: newlineSubstitutionActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        let bracketedQuestionActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "Can you zbracket it)?",
+            to: "can you zbracket it)"
+        )
+        guard bracketedQuestionActual == "Can you zbracket it)?" else {
+            print("FAIL: closing bracket suppressed question terminal insertion: \(String(reflecting: bracketedQuestionActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        let quotedQuestionActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "She asked “Can you zquote come”",
+            to: "she asked “can you zquote come”"
+        )
+        guard quotedQuestionActual == "She asked “can you zquote come?”" else {
+            print("FAIL: quoted question terminal was placed outside the closing quote: \(String(reflecting: quotedQuestionActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        let apostropheTerminalActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "This is zjames'",
+            to: "this is zjames'"
+        )
+        guard apostropheTerminalActual == "This is zjames'." else {
+            print("FAIL: terminal apostrophe was mistaken for a closing quote: \(String(reflecting: apostropheTerminalActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        let contractionApostropheTerminalActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "don't use zjames'",
+            to: "don't use zjames'"
+        )
+        guard contractionApostropheTerminalActual == "don't use zjames'." else {
+            print("FAIL: earlier contraction made a terminal apostrophe look like a quote: \(String(reflecting: contractionApostropheTerminalActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        let inchMeasurementActual = SpokenDictationFormatter.applyingAutomaticPunctuation(
+            candidate: "board is 12\" by 24\"",
+            to: "board is 12\" by 24\""
+        )
+        guard inchMeasurementActual == "board is 12\" by 24\"." else {
+            print("FAIL: inch mark was mistaken for a closing quote: \(String(reflecting: inchMeasurementActual))")
+            exit(EXIT_FAILURE)
+        }
+
+        print("SpokenDictationFormatterTests: all \(cases.count + automaticCases.count + pipelineCases.count + substitutionCases.count + normalizationCases.count + 26) cases passed")
     }
 }

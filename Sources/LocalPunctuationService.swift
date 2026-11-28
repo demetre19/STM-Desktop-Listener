@@ -62,21 +62,36 @@ enum LocalPunctuationService {
         }
     }
 
-    static func apply(to text: String, trace: PunctuationLearning.Trace? = nil) -> String {
+    static func apply(
+        to text: String,
+        trace: PunctuationLearning.Trace? = nil
+    ) -> (text: String, candidate: String?, modelInput: String) {
+        let modelInput = SpokenDictationFormatter.normalizingForPunctuationModel(text)
         guard let modelDirectory = resolvedModelDirectory() else {
             Logger.log("local punctuation model unavailable; using guarded deterministic punctuation")
-            return SpokenDictationFormatter.applyingAutomaticPunctuation(candidate: text, to: text, trace: trace)
+            return (
+                SpokenDictationFormatter.applyingAutomaticPunctuation(candidate: text, to: text, trace: trace),
+                nil,
+                modelInput
+            )
         }
 
-        let modelInput = SpokenDictationFormatter.normalizingForPunctuationModel(text)
         let inferenceInput = modelInput.isEmpty ? text : modelInput
 
         switch punctuationCandidate(for: inferenceInput, modelDirectory: modelDirectory) {
         case .success(let candidate):
-            return SpokenDictationFormatter.applyingAutomaticPunctuation(candidate: candidate, to: text, trace: trace)
+            return (
+                SpokenDictationFormatter.applyingAutomaticPunctuation(candidate: candidate, to: text, trace: trace),
+                candidate,
+                modelInput
+            )
         case .failure(let message):
             Logger.log("local punctuation failed: \(message)")
-            return SpokenDictationFormatter.applyingAutomaticPunctuation(candidate: text, to: text, trace: trace)
+            return (
+                SpokenDictationFormatter.applyingAutomaticPunctuation(candidate: text, to: text, trace: trace),
+                nil,
+                modelInput
+            )
         }
     }
 }

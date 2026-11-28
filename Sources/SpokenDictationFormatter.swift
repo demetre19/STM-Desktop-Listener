@@ -41,21 +41,29 @@ enum SpokenDictationFormatter {
     /// all output before text leaves this type.
     static let spokenMarker = "\u{FE00}"
 
+    /// Invisible marker at a measured quiet chunk boundary. It is evidence for fusion while
+    /// punctuation is being arbitrated and must never survive into pasted output.
+    static let prosodyMarker = "\u{200B}"
+
     static func apply(to transcript: String) -> String {
         strippingSpokenMarkers(applyingSpokenCommands(to: transcript))
     }
 
     static func strippingSpokenMarkers(_ text: String) -> String {
         text.replacingOccurrences(of: spokenMarker, with: "")
+            .replacingOccurrences(of: prosodyMarker, with: "")
     }
 
     /// Joins independently transcribed audio chunks. Each recognizer adds terminal punctuation
     /// to its own chunk, so naive joining leaves stray `.`, `?`, and `,` artifacts mid-text.
     /// Interior punctuation is preserved; only boundary punctuation is removed so the guarded
     /// punctuation pass can repunctuate the whole transcript coherently.
-    static func joiningChunks(_ parts: [String]) -> String {
+    static func joiningChunks(
+        _ parts: [String],
+        prosodyBoundaryAfter: Set<Int> = []
+    ) -> String {
         let boundaryPunctuation = CharacterSet(charactersIn: ".,;:!?…\"'”’()[]")
-        var cleaned: [String] = []
+        var cleaned: [(index: Int, text: String)] = []
         for (index, part) in parts.enumerated() {
             var text = part.trimmingCharacters(in: .whitespacesAndNewlines)
             if index > 0 {
@@ -71,10 +79,23 @@ enum SpokenDictationFormatter {
                 text = text.trimmingCharacters(in: .whitespacesAndNewlines)
             }
             if !text.isEmpty {
-                cleaned.append(text)
+                cleaned.append((index, text))
             }
         }
-        return cleaned.joined(separator: " ")
+        var result = ""
+        var previousIndex: Int?
+        for item in cleaned {
+            if result.isEmpty {
+                result = item.text
+            } else {
+                if let previous = previousIndex, prosodyBoundaryAfter.contains(previous) {
+                    result += prosodyMarker
+                }
+                result += " " + item.text
+            }
+            previousIndex = item.index
+        }
+        return result
     }
 
     static func applyingSpokenCommands(to transcript: String) -> String {
@@ -149,7 +170,7 @@ enum SpokenDictationFormatter {
     /// recognizer punctuation and explicit commands are still preserved as evidence.
     private static let punctuationModelTrimCharacters: CharacterSet = {
         var characters = CharacterSet.punctuationCharacters
-        characters.insert(charactersIn: "\u{FE00}")
+        characters.insert(charactersIn: "\u{FE00}\u{200B}")
         return characters
     }()
 
@@ -306,7 +327,30 @@ enum SpokenDictationFormatter {
                 mergedBoundaryWords: &mergedBoundaryWords,
                 trace: trace
             ) {
-                result.replaceCharacters(in: gapRange, with: sanitized)
+                let followingWord = words[index + 1]
+                var adjustedWord = followingWord.text
+                let sanitizedTrimmed = sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
+                let gapHadTerminator = gap.range(of: "[.!?…]", options: .regularExpression) != nil
+                if let first = sanitizedTrimmed.first {
+                    if ".?!".contains(first), !gapHadTerminator,
+                       let wordFirst = adjustedWord.first,
+                       String(wordFirst) != String(wordFirst).uppercased() {
+                        adjustedWord = String(wordFirst).uppercased() + String(adjustedWord.dropFirst())
+                    }
+                    if (first == "," || sanitized == " "), gapHadTerminator,
+                       shouldLowercaseAfterMergedBoundary(adjustedWord) {
+                        adjustedWord = adjustedWord.lowercased()
+                    }
+                }
+                if adjustedWord != followingWord.text {
+                    let spanRange = NSRange(
+                        location: gapRange.location,
+                        length: NSMaxRange(followingWord.range) - gapRange.location
+                    )
+                    result.replaceCharacters(in: spanRange, with: sanitized + adjustedWord)
+                } else {
+                    result.replaceCharacters(in: gapRange, with: sanitized)
+                }
             }
         }
         return result as String
@@ -412,28 +456,6 @@ enum SpokenDictationFormatter {
         "almost", "all", "you",
     ]
 
-    private static let questionStarters: Set<String> = [
-        "who", "what", "when", "where", "why", "how", "which", "whose", "whom",
-    ]
-
-    private static let questionAuxiliaries: Set<String> = [
-        "is", "are", "am", "was", "were", "do", "does", "did", "can", "could",
-        "should", "would", "will", "shall", "may", "might", "must", "have",
-        "has", "had",
-    ]
-
-    private static let questionSubjects: Set<String> = [
-        "you", "we", "they", "i", "he", "she", "there", "anyone", "everyone",
-        "somebody", "someone", "everybody", "nobody",
-    ]
-
-    /// Embedded-question verbs only count in their imperative forms ("check if", "find out
-    /// whether", "tell me if"). Statements like "I wonder how", "I know why", and "let's see
-    /// if" are excluded — only command-form embedded questions keep a question mark.
-    private static let embeddedQuestionPattern =
-        "(?i)\\b(?:check|determine|verify)\\s+(?:if|whether|who|what|when|where|why|how|which)\\b"
-        + "|\\b(?:find\\s+out|tell\\s+me)\\s+(?:if|whether)\\b"
-
     private static let sentenceTerminators = CharacterSet(charactersIn: ".!?…\n")
     private static let gapSkippables = CharacterSet(charactersIn: " \t\r\n“”\"'()[]{}\u{FE00}")
 
@@ -462,6 +484,35 @@ enum SpokenDictationFormatter {
         }
 
         let result = NSMutableString(capacity: candidate.count)
+        var learnedSentenceStartWords: Set<Int> = []
+
+        func noteCasingAdjustment(gap: String, sanitized: String, boundaryIndex: Int) {
+            let sanitizedTrimmed = sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
+            let gapHadTerminator = gap.range(of: "[.!?…]", options: .regularExpression) != nil
+            guard let first = sanitizedTrimmed.first else { return }
+            if ".?!".contains(first), !gapHadTerminator {
+                learnedSentenceStartWords.insert(boundaryIndex + 1)
+            }
+            if first == ",", gapHadTerminator {
+                mergedBoundaryWords.insert(boundaryIndex + 1)
+            }
+        }
+
+        func trailingSymbolRun(in gap: String) -> String {
+            var symbols = ""
+            for character in gap {
+                if character.isWhitespace { break }
+                if String(character) == prosodyMarker || String(character) == spokenMarker { continue }
+                symbols.append(character)
+            }
+            return symbols
+        }
+
+        func preservingTrailingSymbols(in sourceGap: String, replacement: String) -> String {
+            let symbols = trailingSymbolRun(in: sourceGap)
+            guard !symbols.isEmpty, !replacement.hasPrefix(symbols) else { return replacement }
+            return symbols + replacement
+        }
 
         let sourcePrefixRange = NSRange(location: 0, length: sourceWords[0].range.location)
         result.append(sourceText.substring(with: sourcePrefixRange))
@@ -487,6 +538,7 @@ enum SpokenDictationFormatter {
                     mergedBoundaryWords: &mergedBoundaryWords,
                     trace: trace
                 ) {
+                    noteCasingAdjustment(gap: sourceGap, sanitized: sanitized, boundaryIndex: index)
                     result.append(sanitized)
                 } else {
                     result.append(sourceGap)
@@ -514,21 +566,40 @@ enum SpokenDictationFormatter {
                         nextIndex: right,
                         words: candidateWords,
                         in: candidateText,
+                        prosodicBoundary: sourceGap.contains(prosodyMarker),
+                        sourceBoundaryIndex: index,
                         trace: trace
                     ) {
                         if sanitized == " ", gap.range(of: "[.!?…]", options: .regularExpression) != nil {
                             mergedBoundaryWords.insert(index + 1)
                         }
-                        result.append(sanitized)
+                        noteCasingAdjustment(gap: gap, sanitized: sanitized, boundaryIndex: index)
+                        result.append(preservingTrailingSymbols(in: sourceGap, replacement: sanitized))
+                    } else if PunctuationLearning.boundaryLabel(for: gap) == .none,
+                              let inserted = learnedInsertionGap(
+                                  previousIndex: index,
+                                  nextIndex: index + 1,
+                                  words: sourceWords,
+                                  in: sourceText,
+                                  trace: trace
+                              ) {
+                        if let first = inserted.first, ".?!".contains(first) {
+                            learnedSentenceStartWords.insert(index + 1)
+                        }
+                        result.append(preservingTrailingSymbols(in: sourceGap, replacement: inserted))
                     } else {
-                        result.append(gap)
+                        result.append(preservingTrailingSymbols(in: sourceGap, replacement: gap))
                     }
                 } else {
                     result.append(" ")
                 }
             }
 
-            result.append(candidateWordText(for: index + 1, sourceWords: sourceWords, candidateWords: candidateWords, anchors: anchors))
+            var nextWordText = candidateWordText(for: index + 1, sourceWords: sourceWords, candidateWords: candidateWords, anchors: anchors)
+            if learnedSentenceStartWords.contains(index + 1), let first = nextWordText.first {
+                nextWordText = String(first).uppercased() + String(nextWordText.dropFirst())
+            }
+            result.append(nextWordText)
         }
 
         let sourceSuffixRange = NSRange(
@@ -558,6 +629,86 @@ enum SpokenDictationFormatter {
         return result as String
     }
 
+    /// Correction-grounded insertion for boundaries where neither recognizer nor model proposed
+    /// punctuation. Only exact, repeatedly validated user corrections reach this path.
+    private static func learnedInsertionGap(
+        previousIndex: Int,
+        nextIndex: Int,
+        words: [(text: String, range: NSRange)],
+        in text: NSString,
+        trace: PunctuationLearning.Trace?
+    ) -> String? {
+        let previousWord = words[previousIndex].text.lowercased()
+        guard PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .none, previousWord: previousWord) else { return nil }
+        let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: text)
+        let nextWord = words[nextIndex].text.lowercased()
+        let clauseFirst = words[clauseStart].text.lowercased()
+
+        // Clause-shape analysis walks the preceding clause, so first cheaply test both shape
+        // buckets; only a plausible correction context pays for that scan.
+        var evidencedShape: Bool?
+        var hasAnyEvidence = false
+        for probeShape in [false, true] {
+            if PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: .none,
+                previousWord: previousWord,
+                nextWord: nextWord,
+                clauseFirst: clauseFirst,
+                shaped: probeShape
+            ) != nil {
+                hasAnyEvidence = true
+            }
+            if evidencedShape == nil,
+               PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: .none,
+                previousWord: previousWord,
+                nextWord: nextWord,
+                clauseFirst: clauseFirst,
+                shaped: probeShape,
+                exactOnly: true
+               ) != nil {
+                evidencedShape = probeShape
+            }
+        }
+        guard hasAnyEvidence else { return nil }
+        let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: text)
+        var preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+            input: .none,
+            previousWord: previousWord,
+            nextWord: nextWord,
+            clauseFirst: clauseFirst,
+            shaped: shaped
+        )
+        // Earlier learned breaks can change the mechanical question-shape bucket between
+        // training and the next dictation. Shape is a heuristic, so use the evidenced bucket
+        // as a final exact-context backoff rather than dropping the correction entirely.
+        if preferred == nil, let evidencedShape, evidencedShape != shaped {
+            // Opposite-shape fallback exists only for the same exact corrected boundary.
+            // Broad previous-word backoff must not cross the question/statement divide.
+            preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: .none,
+                previousWord: previousWord,
+                nextWord: nextWord,
+                clauseFirst: clauseFirst,
+                shaped: evidencedShape,
+                exactOnly: true
+            )
+        }
+        guard let preferred, let replacement = preferred.replacementText, !replacement.isEmpty else { return nil }
+        trace?.record(.init(
+            gap: "none",
+            terminator: "",
+            previous: previousWord,
+            next: nextWord,
+            clauseFirst: clauseFirst,
+            shaped: shaped,
+            action: "insert",
+            learned: true,
+            boundaryIndex: previousIndex
+        ))
+        return replacement + " "
+    }
+
     private static func candidateWordText(
         for sourceIndex: Int,
         sourceWords: [(text: String, range: NSRange)],
@@ -579,6 +730,8 @@ enum SpokenDictationFormatter {
         nextIndex: Int,
         words: [(text: String, range: NSRange)],
         in candidate: NSString,
+        prosodicBoundary: Bool = false,
+        sourceBoundaryIndex: Int? = nil,
         trace: PunctuationLearning.Trace? = nil
     ) -> String? {
         let trimmed = gap.trimmingCharacters(in: .whitespaces)
@@ -593,7 +746,8 @@ enum SpokenDictationFormatter {
                 clauseFirst: words[clauseStartIndex(before: previousIndex, words: words, in: candidate)].text.lowercased(),
                 shaped: clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: candidate),
                 action: action,
-                learned: learned
+                learned: learned,
+                boundaryIndex: sourceBoundaryIndex
             ))
         }
 
@@ -602,7 +756,8 @@ enum SpokenDictationFormatter {
                 previousIndex: previousIndex,
                 terminator: firstTerminator(in: trimmed),
                 words: words,
-                in: candidate
+                in: candidate,
+                preferKeep: prosodicBoundary
             ) {
             case .merge(let learned):
                 record("merge", learned: learned)
@@ -610,6 +765,9 @@ enum SpokenDictationFormatter {
             case .keep(let learned):
                 record("keep", learned: learned)
                 return nil
+            case .replace(let replacement, let learned):
+                record("replace", learned: learned)
+                return replacingTerminatorRun(in: trimmed, with: replacement) + " "
             case .undecided:
                 break
             }
@@ -634,6 +792,34 @@ enum SpokenDictationFormatter {
         }
 
         if trimmed.contains(",") {
+            let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: candidate)
+            let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: candidate)
+            let commaPreviousWord = words[previousIndex].text.lowercased()
+            if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .comma, previousWord: commaPreviousWord),
+               let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: .comma,
+                previousWord: commaPreviousWord,
+                nextWord: words[nextIndex].text.lowercased(),
+                clauseFirst: words[clauseStart].text.lowercased(),
+                shaped: shaped
+            ) {
+                if preferred == PunctuationLearning.BoundaryLabel.none {
+                    record("space", learned: true)
+                    return " "
+                }
+                if preferred == .comma {
+                    record("keep", learned: true)
+                    return nil
+                }
+                if let replacement = preferred.replacementText, !replacement.isEmpty {
+                    record("replace", learned: true)
+                    return replacingTerminatorRun(in: trimmed, with: replacement) + " "
+                }
+            }
+            if prosodicBoundary {
+                record("keep")
+                return nil
+            }
             if keepsModelComma(
                 previousText: words[previousIndex].text,
                 nextIndex: nextIndex,
@@ -676,7 +862,8 @@ enum SpokenDictationFormatter {
                 clauseFirst: words[clauseStartIndex(before: previousIndex, words: words, in: sourceText)].text.lowercased(),
                 shaped: clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: sourceText),
                 action: action,
-                learned: learned
+                learned: learned,
+                boundaryIndex: previousIndex
             ))
         }
 
@@ -694,6 +881,9 @@ enum SpokenDictationFormatter {
             case .keep(let learned):
                 record("keep", learned: learned)
                 return nil
+            case .replace(let replacement, let learned):
+                record("replace", learned: learned)
+                return replacingTerminatorRun(in: trimmed, with: replacement) + " "
             case .undecided:
                 break
             }
@@ -711,6 +901,30 @@ enum SpokenDictationFormatter {
         }
 
         if trimmed.contains(",") {
+            let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: sourceText)
+            let shaped = clauseIsQuestionShaped(precedingWordIndex: previousIndex, words: words, in: sourceText)
+            let commaPreviousWord = words[previousIndex].text.lowercased()
+            if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .comma, previousWord: commaPreviousWord),
+               let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: .comma,
+                previousWord: commaPreviousWord,
+                nextWord: words[nextIndex].text.lowercased(),
+                clauseFirst: words[clauseStart].text.lowercased(),
+                shaped: shaped
+            ) {
+                if preferred == PunctuationLearning.BoundaryLabel.none {
+                    record("space", learned: true)
+                    return " "
+                }
+                if preferred == .comma {
+                    record("keep", learned: true)
+                    return nil
+                }
+                if let replacement = preferred.replacementText, !replacement.isEmpty {
+                    record("replace", learned: true)
+                    return replacingTerminatorRun(in: trimmed, with: replacement) + " "
+                }
+            }
             if keepsModelComma(
                 previousText: words[previousIndex].text,
                 nextIndex: nextIndex,
@@ -732,6 +946,7 @@ enum SpokenDictationFormatter {
     private enum TerminatorVerdict {
         case merge(learned: Bool)
         case keep(learned: Bool)
+        case replace(String, learned: Bool)
         case undecided
     }
 
@@ -742,7 +957,8 @@ enum SpokenDictationFormatter {
         previousIndex: Int,
         terminator: String,
         words: [(text: String, range: NSRange)],
-        in text: NSString
+        in text: NSString,
+        preferKeep: Bool = false
     ) -> TerminatorVerdict {
         let previousWord = words[previousIndex].text.lowercased()
         let clauseStart = clauseStartIndex(before: previousIndex, words: words, in: text)
@@ -753,15 +969,33 @@ enum SpokenDictationFormatter {
             words: words,
             in: text
         )
-        if !terminator.isEmpty,
-           let vote = PunctuationLearning.Policy.shared.vote(
-               terminator: terminator,
-               previousWord: previousWord,
-               nextWord: words[previousIndex + 1].text.lowercased(),
-               clauseFirst: words[clauseStart].text.lowercased(),
-               shaped: clauseShaped
-           ) {
-            return vote ? .merge(learned: true) : .keep(learned: true)
+        if !terminator.isEmpty {
+            let input = PunctuationLearning.boundaryLabel(for: terminator)
+            if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: input, previousWord: previousWord),
+               let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: input,
+                previousWord: previousWord,
+                nextWord: words[previousIndex + 1].text.lowercased(),
+                clauseFirst: words[clauseStart].text.lowercased(),
+                shaped: clauseShaped
+            ) {
+                if preferred == input {
+                    return .keep(learned: true)
+                }
+                if preferred == PunctuationLearning.BoundaryLabel.none {
+                    return .merge(learned: true)
+                }
+                if let replacement = preferred.replacementText, !replacement.isEmpty {
+                    return .replace(replacement, learned: true)
+                }
+            }
+        }
+
+        // A measured quiet boundary is prosodic evidence, but not sufficient by itself: it
+        // only breaks a static merge tie when the lexical model/recognizer also proposed a
+        // terminator. Correction-grounded votes above still win over prosody.
+        if preferKeep {
+            return .keep(learned: false)
         }
 
         // Short clauses (2–4 words) that legitimately start with a statement opener keep
@@ -820,6 +1054,25 @@ enum SpokenDictationFormatter {
         return 0
     }
 
+    /// Replaces the first comma/terminator run while preserving surrounding quote or bracket
+    /// characters. Used only for correction-grounded multiclass votes.
+    private static func replacingTerminatorRun(in trimmedGap: String, with replacement: String) -> String {
+        var result = ""
+        var replaced = false
+        for scalarView in trimmedGap.unicodeScalars {
+            let scalar = Character(scalarView)
+            if scalar == "." || scalar == "!" || scalar == "?" || scalar == "…" || scalar == "," {
+                if !replaced {
+                    result.append(replacement)
+                    replaced = true
+                }
+            } else {
+                result.append(scalar)
+            }
+        }
+        return result
+    }
+
     /// Rebuilds a gap's terminator run from its clause shape. `?`/`!` become `.` when the
     /// preceding clause is not question-shaped; `.` becomes `?` when it is. Returns nil when
     /// nothing changes.
@@ -859,7 +1112,7 @@ enum SpokenDictationFormatter {
     ) -> Bool {
         let start = clauseStartIndex(before: precedingWordIndex, words: words, in: text)
         let clauseWords = (start...precedingWordIndex).map { words[$0].text.lowercased() }
-        return clauseWordsAreQuestionShaped(clauseWords)
+        return PunctuationLearning.clauseWordsAreQuestionShaped(clauseWords)
     }
 
     private static func shouldLowercaseAfterMergedBoundary(_ word: String) -> Bool {
@@ -1011,7 +1264,7 @@ enum SpokenDictationFormatter {
         let stripped = strippingSpokenMarkers(text)
         let questionPatterns = [
             #"(?i)^\s*(?:who|what|when|where|why|how|which|whose|whom|is|are|am|was|were|do|does|did|can|could|should|would|will|have|has|had|may|might|must)\b"#,
-            embeddedQuestionPattern,
+            PunctuationLearning.embeddedQuestionPattern,
         ]
         let finalClause = stripped.split(
             omittingEmptySubsequences: true,
@@ -1022,12 +1275,13 @@ enum SpokenDictationFormatter {
             finalClause.range(of: $0, options: .regularExpression) != nil
         }
         let clauseWords = wordMatches(in: finalClause).map { $0.text.lowercased() }
-        let shaped = regexShaped || clauseWordsAreQuestionShaped(clauseWords)
+        let shaped = regexShaped || PunctuationLearning.clauseWordsAreQuestionShaped(clauseWords)
 
         let finalWords = wordMatches(in: finalClause)
+        let terminalBoundaryIndex = wordMatches(in: stripped).count - 1
 
         if let terminal = stripped.range(of: #"[.!?…]+(?=[”’"')\]]*\s*$)"#, options: .regularExpression) {
-            func record(_ action: String) {
+            func record(_ action: String, learned: Bool = false) {
                 trace?.record(.init(
                     gap: "terminal",
                     terminator: String(stripped[terminal].first ?? "."),
@@ -1036,8 +1290,41 @@ enum SpokenDictationFormatter {
                     clauseFirst: finalWords.first?.text.lowercased() ?? "",
                     shaped: shaped,
                     action: action,
-                    learned: false
+                    learned: learned,
+                    boundaryIndex: terminalBoundaryIndex
                 ))
+            }
+            if !terminalIsSpoken {
+                let input = PunctuationLearning.boundaryLabel(
+                    for: String(stripped[terminal].first ?? ".")
+                )
+                let terminalPreviousWord = finalWords.last?.text.lowercased() ?? ""
+                if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: input, previousWord: terminalPreviousWord),
+                   let preferred = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                    input: input,
+                    previousWord: terminalPreviousWord,
+                    nextWord: "",
+                    clauseFirst: finalWords.first?.text.lowercased() ?? "",
+                    shaped: shaped
+                ) {
+                    if preferred == input {
+                        record("keep", learned: true)
+                        return stripped
+                    }
+                    if preferred == PunctuationLearning.BoundaryLabel.none {
+                        var updated = stripped
+                        updated.removeSubrange(terminal)
+                        record("merge", learned: true)
+                        return updated
+                    }
+                    if preferred == .period || preferred == .question || preferred == .exclamation,
+                       let replacement = preferred.replacementText {
+                        var updated = stripped
+                        updated.replaceSubrange(terminal, with: replacement)
+                        record("replace", learned: true)
+                        return updated
+                    }
+                }
             }
             if shaped {
                 if terminalIsSpoken {
@@ -1061,48 +1348,118 @@ enum SpokenDictationFormatter {
             record("keep")
             return stripped
         }
-        if shaped {
-            return stripped + "?"
+        func appendingMissingTerminal(_ punctuation: String) -> String {
+            var trailingQuotes = 0
+            for character in stripped.reversed() {
+                guard "”’\"'".contains(character) else { break }
+                trailingQuotes += 1
+            }
+            guard trailingQuotes > 0 else { return stripped + punctuation }
+            let insertionIndex = stripped.index(stripped.endIndex, offsetBy: -trailingQuotes)
+            let prefix = stripped[..<insertionIndex]
+            let suffix = stripped[insertionIndex...]
+            let allClosingQuotes = suffix.allSatisfy { character in
+                switch character {
+                case "”":
+                    return true
+                case "\"":
+                    return prefix.contains("\"")
+                default:
+                    return false
+                }
+            }
+            guard allClosingQuotes else { return stripped + punctuation }
+            if insertionIndex > stripped.startIndex,
+               stripped[stripped.index(before: insertionIndex)].isNumber,
+               suffix.contains("\"") {
+                // A straight double quote immediately after a digit is commonly an inch mark
+                // (`12" by 24"`), not a closing quotation mark.
+                return stripped + punctuation
+            }
+            return String(prefix) + punctuation + String(suffix)
         }
-        if stripped.range(
-            of: #"[,;:…”’"')\]\s]$"#,
-            options: .regularExpression
-        ) == nil {
-            // Recognizer text that ends on a bare word gets a period; dictation output should
-            // not trail off unpunctuated.
-            return stripped + "."
-        }
-        return stripped
-    }
 
-    private static func clauseWordsAreQuestionShaped(_ clauseWords: [String]) -> Bool {
-        guard let first = clauseWords.first else { return false }
-        if questionStarters.contains(first) || questionAuxiliaries.contains(first) {
-            return true
+        func recordInsertedTerminal(_ learned: Bool) {
+            trace?.record(.init(
+                gap: "terminal",
+                terminator: "",
+                previous: finalWords.last?.text.lowercased() ?? "",
+                next: "",
+                clauseFirst: finalWords.first?.text.lowercased() ?? "",
+                shaped: shaped,
+                action: "insert",
+                learned: learned,
+                boundaryIndex: terminalBoundaryIndex
+            ))
         }
-        for pair in zip(clauseWords, clauseWords.dropFirst()) {
-            if questionStarters.contains(pair.0), questionAuxiliaries.contains(pair.1) {
-                return true
+
+        // Commas, semicolons, colons, and closing quotes are already deliberate terminal
+        // text. In particular an explicit spoken comma must remain a comma rather than
+        // acquiring a learned or question-shaped terminator after it.
+        guard stripped.range(of: #"[,;:][”’"')\]]*\s*$"#, options: .regularExpression) == nil else {
+            return stripped
+        }
+
+        let terminalPreviousWord = finalWords.last?.text.lowercased() ?? ""
+        var learnedTerminal: PunctuationLearning.BoundaryLabel?
+        if PunctuationLearning.CorrectionPolicy.shared.hasEvidence(for: .none, previousWord: terminalPreviousWord) {
+            learnedTerminal = PunctuationLearning.CorrectionPolicy.shared.preferredLabel(
+                input: .none,
+                previousWord: terminalPreviousWord,
+                nextWord: "",
+                clauseFirst: finalWords.first?.text.lowercased() ?? "",
+                shaped: shaped
+            )
+        }
+        if let learnedTerminal {
+            if learnedTerminal == PunctuationLearning.BoundaryLabel.none {
+                recordInsertedTerminal(true)
+                return stripped
             }
-            if questionAuxiliaries.contains(pair.0), questionSubjects.contains(pair.1) {
-                return true
+            if learnedTerminal == .period || learnedTerminal == .question || learnedTerminal == .exclamation,
+               let replacement = learnedTerminal.replacementText {
+                recordInsertedTerminal(true)
+                return appendingMissingTerminal(replacement)
             }
         }
-        return clauseWords
-            .joined(separator: " ")
-            .range(of: embeddedQuestionPattern, options: .regularExpression) != nil
+        if shaped {
+            recordInsertedTerminal(false)
+            return appendingMissingTerminal("?")
+        }
+        // Recognizer text that ends on a bare word gets a period unless correction evidence
+        // prefers another terminal treatment above.
+        recordInsertedTerminal(false)
+        return appendingMissingTerminal(".")
     }
 
     private static func escapedPhrase(_ phrase: String) -> String {
-        NSRegularExpression.escapedPattern(for: phrase).replacingOccurrences(of: "\\ ", with: "\\s+")
+        NSRegularExpression.escapedPattern(for: phrase).replacingOccurrences(
+            of: " ",
+            with: "[ \\t\u{200B}]+"
+        )
     }
 
     private static func phrasePattern(_ phrase: String) -> String {
         "(?i)(?<![\\p{L}\\p{N}])\(phrase)(?![\\p{L}\\p{N}])(?:[,.])?"
     }
 
+    private static let regularExpressionCacheLock = NSLock()
+    private static var regularExpressionCache: [String: NSRegularExpression] = [:]
+
+    private static func cachedRegularExpression(pattern: String) -> NSRegularExpression? {
+        regularExpressionCacheLock.lock()
+        defer { regularExpressionCacheLock.unlock() }
+        if let cached = regularExpressionCache[pattern] { return cached }
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
+        if regularExpressionCache.count >= 512 {
+            regularExpressionCache.removeAll()
+        }
+        regularExpressionCache[pattern] = expression
+        return expression
+    }
+
     private static func replacingMatches(in text: String, pattern: String, with replacement: String) -> String {
-        guard let expression = try? NSRegularExpression(pattern: pattern) else { return text }
+        guard let expression = cachedRegularExpression(pattern: pattern) else { return text }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         return expression.stringByReplacingMatches(in: text, range: range, withTemplate: replacement)
     }

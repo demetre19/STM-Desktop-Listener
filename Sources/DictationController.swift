@@ -14,6 +14,7 @@ final class DictationController {
         let url: URL
         let deleteAfterUse: Bool
         let retryDepth: Int
+        let durationSeconds: TimeInterval
     }
 
     private enum TranscriptionRequestError: LocalizedError {
@@ -46,10 +47,13 @@ final class DictationController {
     private var currentChunkWriter: AVAudioFile?
     private var currentChunkURL: URL?
     private var currentChunkFrameCount: AVAudioFramePosition = 0
+    private var currentChunkSampleRate = 0.0
     private var currentChunkIndex = 0
 
     private var pendingChunks: [AudioChunk] = []
     private var partialTranscripts: [Int: String] = [:]
+    private var chunkMetadata: [[String: Any]] = []
+    private var chunkBoundaryReasons: [Int: String] = [:]
     private var completedChunkCount = 0
     private var totalChunkCount = 0
     private var finishRequested = false
@@ -64,6 +68,7 @@ final class DictationController {
     /// Last text this controller pasted, so the next dictation can capture any
     /// user edits made to it ("what it finally looked like").
     private var lastPastedText: String?
+    private var lastPastedDictationID: String?
 
     private var isBusy = false
     private var currentModel = TranscriptionModel.load()
@@ -263,6 +268,7 @@ final class DictationController {
         let finalChunk = closeCurrentChunkLocked()
         audioLock.unlock()
         if let finalChunk = finalChunk {
+            chunkBoundaryReasons[finalChunk.index] = "final"
             enqueueChunk(finalChunk)
         }
 
@@ -302,6 +308,8 @@ final class DictationController {
         }
         pendingChunks.removeAll()
         partialTranscripts.removeAll()
+        chunkMetadata.removeAll()
+        chunkBoundaryReasons.removeAll()
         completedChunkCount = 0
         totalChunkCount = 0
         finishRequested = false
@@ -318,6 +326,8 @@ final class DictationController {
         transcriptionTasks.removeAll()
         pendingChunks.removeAll()
         partialTranscripts.removeAll()
+        chunkMetadata.removeAll()
+        chunkBoundaryReasons.removeAll()
         completedChunkCount = 0
         totalChunkCount = 0
         finishRequested = false
@@ -461,6 +471,7 @@ final class DictationController {
             if activeTranscriptionEngine == .qwen {
                 Logger.log("dictation qwen live boundary index=\(completed.index) reason=\(reason)")
             }
+            chunkBoundaryReasons[completed.index] = reason
             enqueueChunk(completed)
         }
         if transcriptionFailure == nil, audioEngine != nil {
@@ -482,6 +493,7 @@ final class DictationController {
     private func openNextChunkLocked(format: AVAudioFormat) throws {
         currentChunkIndex += 1
         currentChunkFrameCount = 0
+        currentChunkSampleRate = format.sampleRate
         let chunkURL = FileManager.default.temporaryDirectory.appendingPathComponent("stm-desktop-listener-\(UUID().uuidString)-live-\(currentChunkIndex).wav")
         currentChunkWriter = try AVAudioFile(forWriting: chunkURL, settings: format.settings)
         currentChunkURL = chunkURL
@@ -500,10 +512,23 @@ final class DictationController {
             try? FileManager.default.removeItem(at: url)
             return nil
         }
-        return AudioChunk(index: index, url: url, deleteAfterUse: true, retryDepth: 0)
+        let durationSeconds = currentChunkSampleRate > 0
+            ? TimeInterval(frameCount) / currentChunkSampleRate
+            : 0
+        return AudioChunk(
+            index: index,
+            url: url,
+            deleteAfterUse: true,
+            retryDepth: 0,
+            durationSeconds: durationSeconds
+        )
     }
 
     private func enqueueChunk(_ chunk: AudioChunk) {
+        chunkMetadata.append([
+            "index": chunk.index,
+            "durationSeconds": chunk.durationSeconds,
+        ])
         pendingChunks.append(chunk)
         totalChunkCount = max(totalChunkCount, chunk.index)
         Logger.log("dictation chunk queued index=\(chunk.index) pending=\(pendingChunks.count)")
@@ -596,8 +621,17 @@ final class DictationController {
 
         transcriptionTasks.removeAll()
 
+        let orderedTranscripts = (1...max(totalChunkCount, currentChunkIndex)).compactMap { index in
+            partialTranscripts[index].map { (index: index, text: $0) }
+        }
+        // joiningChunks indexes its dense input array from zero, while audio chunks are
+        // one-based. Pass positions in the ordered transcript array, not chunk identifiers.
+        let quietBoundaryPositions = Set(orderedTranscripts.enumerated().compactMap { position, item in
+            chunkBoundaryReasons[item.index] == "quiet" ? position : nil
+        })
         let rawTranscript = SpokenDictationFormatter.joiningChunks(
-            (1...max(totalChunkCount, currentChunkIndex)).compactMap { partialTranscripts[$0] }
+            orderedTranscripts.map(\.text),
+            prosodyBoundaryAfter: quietBoundaryPositions
         ).trimmingCharacters(in: .whitespacesAndNewlines)
 
         if rawTranscript.isEmpty {
@@ -617,11 +651,13 @@ final class DictationController {
             Logger.log("dictation completed as matched voice command")
             return
         }
+        let pipelineStart = CFAbsoluteTimeGetCurrent()
         let formattedText = SpokenDictationFormatter.applyingSpokenCommands(to: rawTranscript)
         let substitutedText = SpokenDictationFormatter.applyingSubstitutions(
             ConfigStore.stringDictionary("dictation.wordSubstitutions"),
             to: formattedText
         )
+        let commandsFinished = CFAbsoluteTimeGetCurrent()
         // Deterministic cleanup (fillers, stutters, leftover spoken punctuation,
         // mid-clause casing) runs before the punctuation model so the learner
         // still sees raw ASR input vs final output. Toggle in Voice AI settings.
@@ -632,15 +668,86 @@ final class DictationController {
         } else {
             cleanupInput = substitutedText
         }
+        let cleanupFinished = CFAbsoluteTimeGetCurrent()
         let trace = PunctuationLearning.Trace()
-        let punctuatedText = LocalPunctuationService.apply(to: cleanupInput, trace: trace)
-        PunctuationLearning.record(
+        let punctuationResult = LocalPunctuationService.apply(to: cleanupInput, trace: trace)
+        let punctuatedText = punctuationResult.text
+        let punctuationFinished = CFAbsoluteTimeGetCurrent()
+        let learningDictationID = PunctuationLearning.record(
             engine: activeTranscriptionEngine == .qwen ? "qwen" : "worker",
             source: rawForLearner,
             accepted: punctuatedText,
-            trace: trace
+            trace: trace,
+            metadata: learningMetadata(
+                rawASR: rawTranscript,
+                spokenCommands: formattedText,
+                substituted: substitutedText,
+                cleanupInput: cleanupInput,
+                punctuationResult: punctuationResult
+            )
         )
+        let recordFinished = CFAbsoluteTimeGetCurrent()
         completeDictation(with: punctuatedText, polished: false)
+        lastPastedDictationID = learningDictationID
+        Logger.logAsync(
+            "dictation pipeline timing commandsMs=\(milliseconds(from: pipelineStart, to: commandsFinished)) " +
+                "cleanupMs=\(milliseconds(from: commandsFinished, to: cleanupFinished)) " +
+                "punctuationMs=\(milliseconds(from: cleanupFinished, to: punctuationFinished)) " +
+                "learningRecordMs=\(milliseconds(from: punctuationFinished, to: recordFinished)) " +
+                "prePasteTotalMs=\(milliseconds(from: pipelineStart, to: recordFinished)) " +
+                "characters=\(punctuatedText.count) decisions=\(trace.decisions.count)"
+        )
+    }
+
+    private func learningMetadata(
+        rawASR: String,
+        spokenCommands: String,
+        substituted: String,
+        cleanupInput: String,
+        punctuationResult: (text: String, candidate: String?, modelInput: String)
+    ) -> [String: Any] {
+        func bounded(_ text: String) -> String {
+            String(text.prefix(4000))
+        }
+        // Delta-encode adjacent stages: deterministic passes often leave text unchanged, and
+        // storing five copies of every dictation would rotate the bounded ledger too quickly.
+        // A missing stage means byte-identical to the preceding stage in this fixed order.
+        var stages: [String: String] = ["rawASR": bounded(rawASR)]
+        var previousStage = rawASR
+        for (name, text) in [
+            ("spokenCommands", spokenCommands),
+            ("substituted", substituted),
+            ("cleanupInput", cleanupInput),
+            ("punctuationModelInput", punctuationResult.modelInput),
+        ] {
+            if text != previousStage {
+                stages[name] = bounded(text)
+            }
+            previousStage = text
+        }
+        if let candidate = punctuationResult.candidate {
+            stages["punctuationCandidate"] = bounded(candidate)
+        }
+        return [
+            "chunks": learningChunkMetadata(),
+            "stageEncoding": "delta",
+            "stages": stages,
+        ]
+    }
+
+    private func learningChunkMetadata() -> [[String: Any]] {
+        chunkMetadata.map { metadata in
+            var copy = metadata
+            if let index = metadata["index"] as? Int,
+               let reason = chunkBoundaryReasons[index] {
+                copy["boundaryReason"] = reason
+            }
+            return copy
+        }
+    }
+
+    private func milliseconds(from start: CFAbsoluteTime, to end: CFAbsoluteTime) -> Int {
+        Int((end - start) * 1000)
     }
 
 
@@ -661,7 +768,9 @@ final class DictationController {
     /// learner sees the *real* final output, not just what the model emitted.
     private func capturePostEditIfNeeded() {
         guard let pasted = lastPastedText else { return }
+        let dictationID = lastPastedDictationID
         lastPastedText = nil
+        lastPastedDictationID = nil
         guard ConfigStore.bool("dictation.capturePostEdits", default: true) else {
             Logger.log("post-edit skip reason=disabled")
             return
@@ -681,7 +790,7 @@ final class DictationController {
             Logger.log("post-edit skip reason=field-changed pastedChars=\(pasted.count) focusedChars=\(focused.count)")
             return
         }
-        PunctuationLearning.recordPostEdit(pasted: pasted, final: focused)
+        PunctuationLearning.recordPostEdit(pasted: pasted, final: focused, dictationID: dictationID)
         Logger.log("post-edit captured pastedChars=\(pasted.count) finalChars=\(focused.count)")
     }
 
@@ -778,7 +887,13 @@ final class DictationController {
         }
 
         Logger.log("dictation chunk normalized index=\(chunk.index) inputBytes=\(Self.fileByteCount(chunk.url)) outputBytes=\(Self.fileByteCount(outputURL))")
-        return AudioChunk(index: chunk.index, url: outputURL, deleteAfterUse: true, retryDepth: chunk.retryDepth)
+        return AudioChunk(
+            index: chunk.index,
+            url: outputURL,
+            deleteAfterUse: true,
+            retryDepth: chunk.retryDepth,
+            durationSeconds: chunk.durationSeconds
+        )
     }
 
     private func convertAudioBuffer(_ inputBuffer: AVAudioPCMBuffer, converter: AVAudioConverter, outputFile: AVAudioFile) throws {
@@ -867,7 +982,13 @@ final class DictationController {
                 remainingFrames -= AVAudioFramePosition(buffer.frameLength)
             }
 
-            splitChunks.append(AudioChunk(index: chunk.index, url: partURL, deleteAfterUse: true, retryDepth: chunk.retryDepth + 1))
+            splitChunks.append(AudioChunk(
+                index: chunk.index,
+                url: partURL,
+                deleteAfterUse: true,
+                retryDepth: chunk.retryDepth + 1,
+                durationSeconds: TimeInterval(frameCounts[partIndex]) / input.fileFormat.sampleRate
+            ))
         }
 
         return splitChunks
